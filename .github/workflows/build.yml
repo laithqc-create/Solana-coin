@@ -94,21 +94,8 @@ jobs:
         run: |
           echo "=== Building Smart Contract ==="
           
-          # Ensure PATH includes npm bin
-          NPM_BIN=$(npm config get prefix)/bin
-          export PATH="$NPM_BIN:$PATH"
-          
-          echo "Using anchor from: $(which anchor || echo "$NPM_BIN/anchor")"
-          
-          # Try anchor build
-          if command -v anchor &> /dev/null; then
-            anchor build --skip-lint
-          elif [ -f "$NPM_BIN/anchor" ]; then
-            "$NPM_BIN/anchor" build --skip-lint
-          else
-            echo "ERROR: anchor not found!"
-            exit 1
-          fi
+          # Use npx to run anchor directly (doesn't need PATH)
+          npx @coral-xyz/anchor build --skip-lint
       
       - name: Run tests
         working-directory: ./ecosystem-token
