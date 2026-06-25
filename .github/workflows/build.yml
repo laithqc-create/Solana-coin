@@ -7,6 +7,9 @@ on:
     branches: [main, develop]
   workflow_dispatch:
 
+env:
+  SOLANA_VERSION: "1.18.0"
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -15,46 +18,60 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      
-      - name: Cache Rust
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      
-      - name: Cache Build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-build-${{ hashFiles('**/Cargo.lock') }}
-      
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
       
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      
+      - name: Cache Rust cargo
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-build-${{ hashFiles('**/Cargo.lock') }}
+      
       - name: Install Solana CLI
         run: |
-          sh -c "$(curl -sSfL https://release.solana.com/v1.18.0/install)"
+          sh -c "$(curl -sSfL https://release.solana.com/v${SOLANA_VERSION}/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+          solana --version
       
-      - name: Install Anchor
-        run: npm install -g @coral-xyz/anchor
-      
-      - name: Show versions
+      - name: Install Anchor CLI
         run: |
+          npm install -g @coral-xyz/anchor
+          which anchor
+          anchor --version
+      
+      - name: Show all versions
+        run: |
+          echo "=== Rust ==="
           rustc --version
           cargo --version
-          anchor --version
+          echo "=== Node.js ==="
+          node --version
+          npm --version
+          echo "=== Solana ==="
           solana --version
+          echo "=== Anchor ==="
+          anchor --version
       
       - name: Build smart contract
         working-directory: ./ecosystem-token
         run: |
+          echo "Current directory: $(pwd)"
+          echo "Files:"
+          ls -la
           anchor build --skip-lint
         timeout-minutes: 30
       
@@ -71,6 +88,14 @@ jobs:
         working-directory: ./ecosystem-token
         run: cargo fmt -- --check || true
       
+      - name: List build outputs
+        if: always()
+        run: |
+          echo "=== Build artifacts ==="
+          find ecosystem-token/target/deploy -name "*.so" -o -name "*.json" 2>/dev/null || echo "No artifacts found"
+          echo "=== IDL files ==="
+          find ecosystem-token/target/idl -type f 2>/dev/null || echo "No IDL files found"
+      
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -80,6 +105,7 @@ jobs:
             ecosystem-token/target/deploy/*.so
             ecosystem-token/target/idl/
           retention-days: 30
+          if-no-files-found: warn
 
   test:
     runs-on: ubuntu-latest
@@ -95,3 +121,4 @@ jobs:
         working-directory: ./ecosystem-token
         run: cargo test --lib || true
         timeout-minutes: 30
+
