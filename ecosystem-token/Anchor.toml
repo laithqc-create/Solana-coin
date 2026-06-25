@@ -1,0 +1,24 @@
+[toolchain]
+
+[features]
+seeds = false
+init-if-needed = false
+
+[programs.devnet]
+ecosystem_token = "EcosystemTokenProgramID123456789" # Will be updated after deployment
+
+[programs.testnet]
+ecosystem_token = "EcosystemTokenProgramID123456789"
+
+[programs.mainnet]
+ecosystem_token = "EcosystemTokenProgramID123456789"
+
+[registry]
+url = "https://api.github.com/repos/coral-xyz/anchor/releases/latest"
+
+[provider]
+cluster = "Devnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "yarn run ts-mocha --require ts-node/register tests/**/*.ts"

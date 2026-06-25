@@ -1,0 +1,907 @@
+use anchor_lang::prelude::*;
+use anchor_spl::{
+    associated_token::AssociatedToken,
+    token::{mint_to, transfer, Mint, MintTo, Token, TokenAccount, Transfer},
+};
+
+use crate::errors::EcosystemError::*;
+use crate::state::*;
+
+// ============================================================================
+// INITIALIZATION INSTRUCTIONS
+// ============================================================================
+
+pub fn initialize_launchpad(
+    ctx: Context<InitializeLaunchpad>,
+    token_bump: u8,
+    vault_bump: u8,
+) -> Result<()> {
+    let launchpad = &mut ctx.accounts.launchpad_state;
+    
+    launchpad.token_mint = ctx.accounts.token_mint.key();
+    launchpad.usdc_mint = ctx.accounts.usdc_mint.key();
+    launchpad.vault = ctx.accounts.vault.key();
+    launchpad.tax_vault = ctx.accounts.tax_vault.key();
+    launchpad.mint_authority = ctx.accounts.vault_pda.key();
+    launchpad.authority = ctx.accounts.authority.key();
+    launchpad.total_usdc_raised = 0;
+    launchpad.total_tokens_minted = 0;
+    launchpad.tier1_price = 1_000_000; // 1 USDC = 1e6 tokens
+    launchpad.current_discount = 50;   // Start at 50% discount
+    launchpad.discount_threshold_1 = 1_000_000_000_000; // 1M USDC
+    launchpad.discount_threshold_2 = 2_000_000_000_000; // 2M USDC
+    launchpad.paused = false;
+    launchpad.bump = token_bump;
+
+    let yield_config = &mut ctx.accounts.yield_config;
+    let now = Clock::get()?.unix_timestamp;
+    yield_config.snapshot_frequency = 604_800; // 7 days
+    yield_config.last_snapshot = now;
+    yield_config.next_snapshot = now + 604_800;
+    yield_config.bump = ctx.bumps.yield_config;
+
+    Ok(())
+}
+
+pub fn initialize_treasury(
+    ctx: Context<InitializeTreasury>,
+    marketing_address: Pubkey,
+    asset_manager_address: Pubkey,
+    owner_address: Pubkey,
+) -> Result<()> {
+    let treasury = &mut ctx.accounts.treasury_vault;
+    treasury.aave_position = 0;
+    treasury.total_deposited = 0;
+    treasury.total_yields_earned = 0;
+    treasury.total_yields_distributed = 0;
+    treasury.last_aave_claim = Clock::get()?.unix_timestamp;
+    treasury.authority = ctx.accounts.authority.key();
+    treasury.bump = ctx.bumps.treasury_vault;
+
+    let revenue_dist = &mut ctx.accounts.revenue_distribution;
+    revenue_dist.user_percentage = 40;
+    revenue_dist.marketing_percentage = 20;
+    revenue_dist.asset_manager_percentage = 20;
+    revenue_dist.owner_percentage = 20;
+    revenue_dist.marketing_address = marketing_address;
+    revenue_dist.asset_manager_address = asset_manager_address;
+    revenue_dist.owner_address = owner_address;
+    revenue_dist.total_distributed = 0;
+    revenue_dist.authority = ctx.accounts.authority.key();
+    revenue_dist.bump = ctx.bumps.revenue_distribution;
+
+    Ok(())
+}
+
+// ============================================================================
+// MINTING & REDEMPTION
+// ============================================================================
+
+pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -> Result<()> {
+    require!(!ctx.accounts.launchpad_state.paused, LaunchpadPaused);
+    require!(usdc_amount > 0, InsufficientUsdc);
+
+    let launchpad = &mut ctx.accounts.launchpad_state;
+
+    // Calculate discount based on USDC raised
+    let discount = if launchpad.total_usdc_raised < launchpad.discount_threshold_1 {
+        50
+    } else if launchpad.total_usdc_raised < launchpad.discount_threshold_2 {
+        40
+    } else {
+        50
+    };
+
+    // Calculate tokens to mint
+    let base_tokens = usdc_amount
+        .checked_mul(launchpad.tier1_price)
+        .ok_or(MathOverflow)?;
+    let tokens_to_mint = if is_tier2 {
+        base_tokens
+            .checked_mul(100 + discount as u64)
+            .ok_or(MathOverflow)?
+            .checked_div(100)
+            .ok_or(MathOverflow)?
+    } else {
+        base_tokens
+    };
+
+    // Check supply cap (100M tokens)
+    let new_total = launchpad
+        .total_tokens_minted
+        .checked_add(tokens_to_mint)
+        .ok_or(MathOverflow)?;
+    require!(new_total <= 100_000_000_000_000, SupplyCapExceeded); // 100M * 1e6
+
+    // Transfer USDC from user to vault
+    let transfer_ctx = CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.user_usdc_ata.to_account_info(),
+            to: ctx.accounts.vault.to_account_info(),
+            authority: ctx.accounts.user.to_account_info(),
+        },
+    );
+    transfer(transfer_ctx, usdc_amount)?;
+
+    // Mint tokens to user
+    let seeds = &[b"vault", &[launchpad.bump]];
+    let signer_seeds = &[&seeds[..]];
+
+    let mint_ctx = CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        MintTo {
+            mint: ctx.accounts.token_mint.to_account_info(),
+            to: ctx.accounts.user_token_ata.to_account_info(),
+            authority: ctx.accounts.vault_pda.to_account_info(),
+        },
+        signer_seeds,
+    );
+    mint_to(mint_ctx, tokens_to_mint)?;
+
+    // Update user tier info
+    let user_tier = &mut ctx.accounts.user_tier_info;
+    user_tier.user = ctx.accounts.user.key();
+    user_tier.is_tier2 = is_tier2;
+    user_tier.total_tokens_minted = tokens_to_mint;
+
+    if is_tier2 {
+        let now = Clock::get()?.unix_timestamp;
+        user_tier.vesting_schedule = Some(VestingSchedule {
+            start_time: now,
+            end_time: now + (365 * 24 * 3600), // 365 days
+            total_amount: tokens_to_mint,
+            claimed_amount: 0,
+        });
+    }
+
+    user_tier.bump = ctx.bumps.user_tier_info;
+
+    // Update launchpad state
+    launchpad.total_usdc_raised = launchpad
+        .total_usdc_raised
+        .checked_add(usdc_amount)
+        .ok_or(MathOverflow)?;
+    launchpad.total_tokens_minted = new_total;
+    launchpad.current_discount = discount as u8;
+
+    Ok(())
+}
+
+pub fn redeem_tokens(ctx: Context<RedeemTokens>, token_amount: u64) -> Result<()> {
+    require!(!ctx.accounts.launchpad_state.paused, LaunchpadPaused);
+
+    let user_tier = &ctx.accounts.user_tier_info;
+    require!(!user_tier.is_tier2, CannotRedeemTier2);
+    require!(token_amount > 0, InvalidRedeemAmount);
+
+    // Transfer tokens to tax vault (burn simulation)
+    let transfer_ctx = CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.user_token_ata.to_account_info(),
+            to: ctx.accounts.tax_vault.to_account_info(),
+            authority: ctx.accounts.user.to_account_info(),
+        },
+    );
+    transfer(transfer_ctx, token_amount)?;
+
+    // Calculate USDC redemption (1 token = 1 USDC for Tier 1)
+    let usdc_amount = token_amount.checked_div(1_000_000).ok_or(MathOverflow)?;
+
+    // Transfer USDC from vault to user
+    let seeds = &[b"vault", &[ctx.accounts.launchpad_state.bump]];
+    let signer_seeds = &[&seeds[..]];
+
+    let transfer_ctx = CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.vault.to_account_info(),
+            to: ctx.accounts.user_usdc_ata.to_account_info(),
+            authority: ctx.accounts.vault_pda.to_account_info(),
+        },
+        signer_seeds,
+    );
+    transfer(transfer_ctx, usdc_amount)?;
+
+    Ok(())
+}
+
+// ============================================================================
+// TRANSFER WITH TAX
+// ============================================================================
+
+pub fn transfer_with_tax(ctx: Context<TransferWithTax>, amount: u64) -> Result<()> {
+    require!(amount > 0, InsufficientTokens);
+
+    let user_tier = &ctx.accounts.user_tier_info;
+
+    // Check vesting lock for Tier 2
+    if user_tier.is_tier2 {
+        if let Some(vesting) = &user_tier.vesting_schedule {
+            let now = Clock::get()?.unix_timestamp;
+            let vested = vesting.vested_amount(now);
+            require!(vested >= amount, CannotTransferLocked);
+        }
+    }
+
+    // Calculate 0.1% tax
+    let tax = amount
+        .checked_mul(1)
+        .ok_or(MathOverflow)?
+        .checked_div(1000)
+        .ok_or(MathOverflow)?;
+    let net_amount = amount.checked_sub(tax).ok_or(MathOverflow)?;
+
+    // Split tax: 70% to treasury, 30% to yield vault
+    let treasury_tax = tax
+        .checked_mul(70)
+        .ok_or(MathOverflow)?
+        .checked_div(100)
+        .ok_or(MathOverflow)?;
+    let yield_tax = tax.checked_sub(treasury_tax).ok_or(MathOverflow)?;
+
+    // Transfer net amount to recipient
+    let transfer_ctx = CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.from.to_account_info(),
+            to: ctx.accounts.to.to_account_info(),
+            authority: ctx.accounts.user.to_account_info(),
+        },
+    );
+    transfer(transfer_ctx, net_amount)?;
+
+    // Transfer treasury tax
+    let transfer_ctx = CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.from.to_account_info(),
+            to: ctx.accounts.treasury_vault_ata.to_account_info(),
+            authority: ctx.accounts.user.to_account_info(),
+        },
+    );
+    transfer(transfer_ctx, treasury_tax)?;
+
+    // Transfer yield tax
+    let transfer_ctx = CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.from.to_account_info(),
+            to: ctx.accounts.yield_vault_ata.to_account_info(),
+            authority: ctx.accounts.user.to_account_info(),
+        },
+    );
+    transfer(transfer_ctx, yield_tax)?;
+
+    Ok(())
+}
+
+// ============================================================================
+// STAKING & YIELD
+// ============================================================================
+
+pub fn stake_tokens(ctx: Context<StakeTokens>, amount: u64) -> Result<()> {
+    require!(amount > 0, InsufficientTokens);
+
+    let user_tier = &ctx.accounts.user_tier_info;
+
+    // Ensure tokens are not vesting-locked
+    if user_tier.is_tier2 {
+        if let Some(vesting) = &user_tier.vesting_schedule {
+            let now = Clock::get()?.unix_timestamp;
+            let vested = vesting.vested_amount(now);
+            require!(vested >= amount, VestingLocked);
+        }
+    }
+
+    // Transfer tokens to staking vault
+    let transfer_ctx = CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.user_token_ata.to_account_info(),
+            to: ctx.accounts.staking_vault.to_account_info(),
+            authority: ctx.accounts.user.to_account_info(),
+        },
+    );
+    transfer(transfer_ctx, amount)?;
+
+    // Update staking info
+    let staking_info = &mut ctx.accounts.staking_info;
+    staking_info.user = ctx.accounts.user.key();
+    staking_info.staked_amount = staking_info
+        .staked_amount
+        .checked_add(amount)
+        .ok_or(MathOverflow)?;
+    staking_info.staked_at = Clock::get()?.unix_timestamp;
+    staking_info.bump = ctx.bumps.staking_info;
+
+    Ok(())
+}
+
+pub fn unstake_tokens(ctx: Context<UnstakeTokens>, amount: u64) -> Result<()> {
+    require!(amount > 0, InsufficientTokens);
+
+    let staking_info = &mut ctx.accounts.staking_info;
+    require!(staking_info.staked_amount >= amount, NoStakedTokens);
+
+    // Transfer tokens back to user
+    let transfer_ctx = CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.staking_vault.to_account_info(),
+            to: ctx.accounts.user_token_ata.to_account_info(),
+            authority: ctx.accounts.user.to_account_info(),
+        },
+    );
+    transfer(transfer_ctx, amount)?;
+
+    staking_info.staked_amount = staking_info
+        .staked_amount
+        .checked_sub(amount)
+        .ok_or(MathOverflow)?;
+
+    Ok(())
+}
+
+pub fn create_yield_snapshot(ctx: Context<CreateYieldSnapshot>) -> Result<()> {
+    let yield_config = &mut ctx.accounts.yield_config;
+    let now = Clock::get()?.unix_timestamp;
+
+    require!(now >= yield_config.next_snapshot, SnapshotFrequencyNotMet);
+
+    // Create new snapshot
+    let snapshot = &mut ctx.accounts.yield_snapshot;
+    snapshot.snapshot_time = now;
+    snapshot.total_staked = 0; // Would be summed from all StakingInfo in production
+    snapshot.tax_collected = ctx.accounts.tax_vault.amount;
+    snapshot.is_distributed = true;
+    snapshot.bump = ctx.bumps.yield_snapshot;
+
+    // Update yield config
+    yield_config.last_snapshot = now;
+    yield_config.next_snapshot = now + yield_config.snapshot_frequency;
+
+    Ok(())
+}
+
+pub fn claim_yield(ctx: Context<ClaimYield>) -> Result<()> {
+    let staking_info = &ctx.accounts.staking_info;
+    require!(staking_info.staked_amount > 0, NoStakedTokens);
+
+    let snapshot = &ctx.accounts.yield_snapshot;
+    require!(snapshot.is_distributed, YieldSnapshotNotReady);
+    require!(snapshot.total_staked > 0, NoYieldToClaim);
+
+    // Calculate pro-rata yield
+    let user_share = (staking_info.staked_amount as u128)
+        .checked_mul(snapshot.tax_collected as u128)
+        .ok_or(MathOverflow)?
+        .checked_div(snapshot.total_staked as u128)
+        .ok_or(MathOverflow)? as u64;
+
+    require!(user_share > 0, NoYieldToClaim);
+
+    // Transfer yield to user
+    let transfer_ctx = CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.tax_vault.to_account_info(),
+            to: ctx.accounts.user_usdc_ata.to_account_info(),
+            authority: ctx.accounts.user.to_account_info(),
+        },
+    );
+    transfer(transfer_ctx, user_share)?;
+
+    // Update staking info
+    let mut staking_mut = ctx.accounts.staking_info.clone();
+    staking_mut.last_claim = Clock::get()?.unix_timestamp;
+    staking_mut.total_yield_claimed = staking_mut
+        .total_yield_claimed
+        .checked_add(user_share)
+        .ok_or(MathOverflow)?;
+
+    Ok(())
+}
+
+// ============================================================================
+// ADMIN INSTRUCTIONS
+// ============================================================================
+
+pub fn set_tier2_whitelist(
+    ctx: Context<SetTier2Whitelist>,
+    is_whitelisted: bool,
+) -> Result<()> {
+    let whitelist = &mut ctx.accounts.tier2_whitelist;
+    whitelist.user = ctx.accounts.target_user.key();
+    whitelist.is_whitelisted = is_whitelisted;
+    whitelist.whitelisted_at = if is_whitelisted {
+        Clock::get()?.unix_timestamp
+    } else {
+        0
+    };
+    whitelist.authority = ctx.accounts.authority.key();
+    whitelist.bump = ctx.bumps.tier2_whitelist;
+
+    Ok(())
+}
+
+pub fn deposit_to_aave(ctx: Context<DepositToAave>, amount: u64) -> Result<()> {
+    require!(amount > 0, InsufficientUsdc);
+
+    let treasury = &mut ctx.accounts.treasury_vault;
+    
+    // Validate deposit
+    crate::aave::validate_aave_deposit(amount)?;
+
+    // Transfer USDC to Aave (simulated)
+    // In production: Call Aave LendingPool.deposit() via CPI
+    
+    treasury.aave_position = treasury
+        .aave_position
+        .checked_add(amount)
+        .ok_or(MathOverflow)?;
+    treasury.total_deposited = treasury
+        .total_deposited
+        .checked_add(amount)
+        .ok_or(MathOverflow)?;
+
+    Ok(())
+}
+
+pub fn claim_aave_yields(ctx: Context<ClaimAaveYields>) -> Result<()> {
+    let treasury = &mut ctx.accounts.treasury_vault;
+    let now = Clock::get()?.unix_timestamp;
+
+    let interest = crate::aave::claim_aave_yields(
+        treasury.aave_position,
+        treasury.last_aave_claim,
+        now,
+    )?;
+
+    require!(interest > 0, NoYieldToClaim);
+
+    treasury.total_yields_earned = treasury
+        .total_yields_earned
+        .checked_add(interest)
+        .ok_or(MathOverflow)?;
+    treasury.last_aave_claim = now;
+
+    Ok(())
+}
+
+pub fn distribute_revenue(ctx: Context<DistributeRevenue>) -> Result<()> {
+    let revenue_dist = &ctx.accounts.revenue_distribution;
+    let treasury = &ctx.accounts.treasury_vault;
+
+    require!(treasury.total_yields_earned > treasury.total_yields_distributed, InsufficientYield);
+
+    let available = treasury
+        .total_yields_earned
+        .checked_sub(treasury.total_yields_distributed)
+        .ok_or(MathOverflow)?;
+
+    // Calculate distributions
+    let user_share = available
+        .checked_mul(revenue_dist.user_percentage as u64)
+        .ok_or(MathOverflow)?
+        .checked_div(100)
+        .ok_or(MathOverflow)?;
+    
+    let marketing_share = available
+        .checked_mul(revenue_dist.marketing_percentage as u64)
+        .ok_or(MathOverflow)?
+        .checked_div(100)
+        .ok_or(MathOverflow)?;
+
+    let manager_share = available
+        .checked_mul(revenue_dist.asset_manager_percentage as u64)
+        .ok_or(MathOverflow)?
+        .checked_div(100)
+        .ok_or(MathOverflow)?;
+
+    let owner_share = available
+        .checked_mul(revenue_dist.owner_percentage as u64)
+        .ok_or(MathOverflow)?
+        .checked_div(100)
+        .ok_or(MathOverflow)?;
+
+    // In production: Transfer shares to respective addresses
+    // For now: Just update treasury tracking
+    let mut treasury_mut = ctx.accounts.treasury_vault.clone();
+    treasury_mut.total_yields_distributed = treasury_mut
+        .total_yields_distributed
+        .checked_add(user_share + marketing_share + manager_share + owner_share)
+        .ok_or(MathOverflow)?;
+
+    Ok(())
+}
+
+pub fn update_allocation_percentages(
+    ctx: Context<UpdateAllocationPercentages>,
+    user_pct: u8,
+    marketing_pct: u8,
+    manager_pct: u8,
+    owner_pct: u8,
+) -> Result<()> {
+    require!(
+        (user_pct + marketing_pct + manager_pct + owner_pct) == 100,
+        InvalidDistributionPercentages
+    );
+
+    let revenue_dist = &mut ctx.accounts.revenue_distribution;
+    revenue_dist.user_percentage = user_pct;
+    revenue_dist.marketing_percentage = marketing_pct;
+    revenue_dist.asset_manager_percentage = manager_pct;
+    revenue_dist.owner_percentage = owner_pct;
+
+    Ok(())
+}
+
+pub fn pause_launchpad(ctx: Context<PauseLaunchpad>) -> Result<()> {
+    let launchpad = &mut ctx.accounts.launchpad_state;
+    launchpad.paused = true;
+    Ok(())
+}
+
+pub fn resume_launchpad(ctx: Context<ResumeLaunchpad>) -> Result<()> {
+    let launchpad = &mut ctx.accounts.launchpad_state;
+    launchpad.paused = false;
+    Ok(())
+}
+
+// ============================================================================
+// CONTEXT DEFINITIONS
+// ============================================================================
+
+#[derive(Accounts)]
+#[instruction(token_bump: u8, vault_bump: u8)]
+pub struct InitializeLaunchpad<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + 32 * 6 + 8 * 4 + 1 * 5 + 1,
+        seeds = [b"launchpad"],
+        bump
+    )]
+    pub launchpad_state: Account<'info, LaunchpadState>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + 8 * 2 + 8 + 1,
+        seeds = [b"yield-config"],
+        bump
+    )]
+    pub yield_config: Account<'info, YieldConfig>,
+
+    pub token_mint: Account<'info, Mint>,
+    pub usdc_mint: Account<'info, Mint>,
+
+    #[account(
+        init,
+        payer = authority,
+        associated_token::mint = usdc_mint,
+        associated_token::authority = vault_pda
+    )]
+    pub vault: Account<'info, TokenAccount>,
+
+    #[account(
+        init,
+        payer = authority,
+        associated_token::mint = token_mint,
+        associated_token::authority = vault_pda
+    )]
+    pub tax_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: Vault PDA
+    #[account(seeds = [b"vault"], bump = vault_bump)]
+    pub vault_pda: UncheckedAccount<'info>,
+
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct InitializeTreasury<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + 8 * 4 + 8 + 32 + 1,
+        seeds = [b"treasury-vault"],
+        bump
+    )]
+    pub treasury_vault: Account<'info, TreasuryVault>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + 8 + 32 * 3 + 1 * 4,
+        seeds = [b"revenue-dist"],
+        bump
+    )]
+    pub revenue_distribution: Account<'info, RevenueDistribution>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct MintTokens<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(mut, seeds = [b"launchpad"], bump = launchpad_state.bump)]
+    pub launchpad_state: Account<'info, LaunchpadState>,
+
+    #[account(mut)]
+    pub token_mint: Account<'info, Mint>,
+
+    #[account(mut)]
+    pub user_usdc_ata: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub user_token_ata: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub vault: Account<'info, TokenAccount>,
+
+    /// CHECK: Vault PDA
+    pub vault_pda: UncheckedAccount<'info>,
+
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + 32 + 1 + 50 + 8 + 1,
+        seeds = [b"user-tier", user.key().as_ref()],
+        bump
+    )]
+    pub user_tier_info: Account<'info, UserTierInfo>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RedeemTokens<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(mut, seeds = [b"launchpad"], bump = launchpad_state.bump)]
+    pub launchpad_state: Account<'info, LaunchpadState>,
+
+    #[account(mut)]
+    pub user_token_ata: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub user_usdc_ata: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub vault: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub tax_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: Vault PDA
+    pub vault_pda: UncheckedAccount<'info>,
+
+    #[account(seeds = [b"user-tier", user.key().as_ref()], bump = user_tier_info.bump)]
+    pub user_tier_info: Account<'info, UserTierInfo>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct TransferWithTax<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(mut)]
+    pub from: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub to: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub treasury_vault_ata: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub yield_vault_ata: Account<'info, TokenAccount>,
+
+    #[account(seeds = [b"user-tier", user.key().as_ref()], bump = user_tier_info.bump)]
+    pub user_tier_info: Account<'info, UserTierInfo>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct StakeTokens<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(mut)]
+    pub user_token_ata: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub staking_vault: Account<'info, TokenAccount>,
+
+    #[account(seeds = [b"user-tier", user.key().as_ref()], bump = user_tier_info.bump)]
+    pub user_tier_info: Account<'info, UserTierInfo>,
+
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + 32 + 8 * 4 + 1,
+        seeds = [b"staking", user.key().as_ref()],
+        bump
+    )]
+    pub staking_info: Account<'info, StakingInfo>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UnstakeTokens<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(mut)]
+    pub user_token_ata: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub staking_vault: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        seeds = [b"staking", user.key().as_ref()],
+        bump = staking_info.bump
+    )]
+    pub staking_info: Account<'info, StakingInfo>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct CreateYieldSnapshot<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [b"yield-config"], bump = yield_config.bump)]
+    pub yield_config: Account<'info, YieldConfig>,
+
+    #[account(mut)]
+    pub tax_vault: Account<'info, TokenAccount>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + 8 * 2 + 8 + 1 + 1,
+        seeds = [b"yield-snapshot", &Clock::get()?.unix_timestamp.to_le_bytes()],
+        bump
+    )]
+    pub yield_snapshot: Account<'info, YieldSnapshot>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimYield<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(mut)]
+    pub user_usdc_ata: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub tax_vault: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        seeds = [b"staking", user.key().as_ref()],
+        bump = staking_info.bump
+    )]
+    pub staking_info: Account<'info, StakingInfo>,
+
+    pub yield_snapshot: Account<'info, YieldSnapshot>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct SetTier2Whitelist<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    /// CHECK: Target user to whitelist
+    pub target_user: UncheckedAccount<'info>,
+
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = 8 + 32 + 1 + 8 + 32 + 1,
+        seeds = [b"whitelist", target_user.key().as_ref()],
+        bump
+    )]
+    pub tier2_whitelist: Account<'info, Tier2Whitelist>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct DepositToAave<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [b"treasury-vault"], bump = treasury_vault.bump)]
+    pub treasury_vault: Account<'info, TreasuryVault>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimAaveYields<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [b"treasury-vault"], bump = treasury_vault.bump)]
+    pub treasury_vault: Account<'info, TreasuryVault>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct DistributeRevenue<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [b"treasury-vault"], bump = treasury_vault.bump)]
+    pub treasury_vault: Account<'info, TreasuryVault>,
+
+    #[account(seeds = [b"revenue-dist"], bump = revenue_distribution.bump)]
+    pub revenue_distribution: Account<'info, RevenueDistribution>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateAllocationPercentages<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [b"revenue-dist"], bump = revenue_distribution.bump)]
+    pub revenue_distribution: Account<'info, RevenueDistribution>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct PauseLaunchpad<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [b"launchpad"], bump = launchpad_state.bump)]
+    pub launchpad_state: Account<'info, LaunchpadState>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ResumeLaunchpad<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [b"launchpad"], bump = launchpad_state.bump)]
+    pub launchpad_state: Account<'info, LaunchpadState>,
+
+    pub system_program: Program<'info, System>,
+}

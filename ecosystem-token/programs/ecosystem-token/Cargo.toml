@@ -1,0 +1,15 @@
+[package]
+name = "ecosystem_token"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anchor-lang = { workspace = true }
+anchor-spl = { workspace = true }
+spl-token = { workspace = true }
+spl-associated-token-account = { workspace = true }
+rust_decimal = { workspace = true }
+
+[features]
+default = []
