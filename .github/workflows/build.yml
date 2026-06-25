@@ -20,74 +20,93 @@ jobs:
         with:
           node-version: '18'
       
+      - name: Verify Node.js
+        run: |
+          echo "=== Node.js Setup ==="
+          node --version
+          npm --version
+          echo "Node path: $(which node)"
+          echo "npm path: $(which npm)"
+      
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       
-      - name: Cache Rust cargo
+      - name: Verify Rust
+        run: |
+          echo "=== Rust Setup ==="
+          rustc --version
+          cargo --version
+          echo "rustc path: $(which rustc)"
+      
+      - name: Cache Rust
         uses: actions/cache@v4
         with:
           path: ~/.cargo
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
       
-      - name: Cache Rust build
+      - name: Cache target
         uses: actions/cache@v4
         with:
           path: target
-          key: ${{ runner.os }}-build-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-
       
       - name: Install Anchor CLI
         run: |
+          echo "=== Installing Anchor CLI ==="
           npm install -g @coral-xyz/anchor
-          echo "Anchor installed at:"
+          echo "Installation complete, verifying..."
           which anchor
           anchor --version
       
-      - name: Show installed versions
+      - name: Verify all tools
         run: |
-          echo "=== Rust ==="
-          rustc --version
-          cargo --version
-          echo "=== Node.js ==="
-          node --version
-          npm --version
-          echo "=== Anchor ==="
-          anchor --version
+          echo "=== All Tools Installed ==="
+          echo "Node.js: $(node --version)"
+          echo "npm: $(npm --version)"
+          echo "Rust: $(rustc --version)"
+          echo "Cargo: $(cargo --version)"
+          echo "Anchor: $(anchor --version)"
+      
+      - name: Check project
+        run: |
+          echo "=== Project Structure ==="
+          ls -la ecosystem-token/ | head -20
+          echo ""
+          echo "=== Anchor.toml ==="
+          cat ecosystem-token/Anchor.toml | head -15
       
       - name: Build smart contract
         working-directory: ./ecosystem-token
         run: |
-          echo "Building smart contract..."
+          echo "=== Building Smart Contract ==="
           anchor build --skip-lint
-          echo "Build complete!"
       
-      - name: Run Cargo tests
+      - name: Run tests
         working-directory: ./ecosystem-token
-        run: |
-          echo "Running tests..."
-          cargo test --lib --release || true
+        run: cargo test --lib --release || true
       
-      - name: Lint with clippy
+      - name: Lint
         working-directory: ./ecosystem-token
-        run: |
-          echo "Running clippy..."
-          cargo clippy --all-targets || true
+        run: cargo clippy --all-targets || true
       
-      - name: Check format
+      - name: Format check
         working-directory: ./ecosystem-token
-        run: |
-          echo "Checking format..."
-          cargo fmt -- --check || true
+        run: cargo fmt -- --check || true
       
-      - name: List build outputs
+      - name: List artifacts
         if: always()
         run: |
-          echo "=== Smart Contract Binary ==="
-          find ecosystem-token/target/deploy -name "*.so" -exec ls -lh {} \; 2>/dev/null || echo "No .so files found"
+          echo "=== Build Artifacts ==="
+          find ecosystem-token/target/deploy -name "*.so" 2>/dev/null || echo "No .so files"
           echo ""
           echo "=== IDL Files ==="
-          find ecosystem-token/target/idl -type f -exec ls -lh {} \; 2>/dev/null || echo "No IDL files found"
+          find ecosystem-token/target/idl -type f 2>/dev/null || echo "No IDL files"
       
       - name: Upload artifacts
         if: always()
