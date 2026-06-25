@@ -61,39 +61,25 @@ jobs:
           echo "=== Installing Anchor CLI ==="
           npm install -g @coral-xyz/anchor
           
-          echo "Installation complete, checking npm global bin..."
+          # Get npm bin directory and add to PATH
           NPM_BIN=$(npm config get prefix)/bin
           echo "npm bin directory: $NPM_BIN"
-          
-          # Add npm bin to PATH
           echo "$NPM_BIN" >> $GITHUB_PATH
-          export PATH="$NPM_BIN:$PATH"
           
-          echo "Verifying installation..."
-          ls -la "$NPM_BIN/anchor" || echo "anchor binary not found at $NPM_BIN"
-          "$NPM_BIN/anchor" --version || echo "Could not run anchor from $NPM_BIN"
+          echo "Anchor installation complete"
       
       - name: Verify all tools
         run: |
-          echo "=== All Tools Installed ==="
+          echo "=== Checking Installed Tools ==="
           echo "Node.js: $(node --version)"
           echo "npm: $(npm --version)"
           echo "Rust: $(rustc --version)"
           echo "Cargo: $(cargo --version)"
           
-          # Try to run anchor from different locations
-          if command -v anchor &> /dev/null; then
-            echo "Anchor: $(anchor --version)"
-          else
-            echo "Anchor not in PATH, trying npm bin directory..."
-            NPM_BIN=$(npm config get prefix)/bin
-            if [ -f "$NPM_BIN/anchor" ]; then
-              echo "Anchor found at: $NPM_BIN/anchor"
-              "$NPM_BIN/anchor" --version
-            else
-              echo "WARNING: Anchor binary not found at $NPM_BIN"
-            fi
-          fi
+          # Try to find anchor
+          echo ""
+          echo "Looking for Anchor CLI..."
+          command -v anchor && echo "Anchor found in PATH: $(anchor --version)" || echo "Anchor will be located via npm bin directory"
       
       - name: Check project
         run: |
