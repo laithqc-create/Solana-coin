@@ -7,9 +7,6 @@ on:
     branches: [main, develop]
   workflow_dispatch:
 
-env:
-  SOLANA_VERSION: "1.18.0"
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -40,20 +37,14 @@ jobs:
           path: target
           key: ${{ runner.os }}-build-${{ hashFiles('**/Cargo.lock') }}
       
-      - name: Install Solana CLI
-        run: |
-          sh -c "$(curl -sSfL https://release.solana.com/v${SOLANA_VERSION}/install)"
-          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
-          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
-          solana --version
-      
       - name: Install Anchor CLI
         run: |
           npm install -g @coral-xyz/anchor
+          echo "Anchor installed at:"
           which anchor
           anchor --version
       
-      - name: Show all versions
+      - name: Show installed versions
         run: |
           echo "=== Rust ==="
           rustc --version
@@ -61,40 +52,42 @@ jobs:
           echo "=== Node.js ==="
           node --version
           npm --version
-          echo "=== Solana ==="
-          solana --version
           echo "=== Anchor ==="
           anchor --version
       
       - name: Build smart contract
         working-directory: ./ecosystem-token
         run: |
-          echo "Current directory: $(pwd)"
-          echo "Files:"
-          ls -la
+          echo "Building smart contract..."
           anchor build --skip-lint
-        timeout-minutes: 30
+          echo "Build complete!"
       
       - name: Run Cargo tests
         working-directory: ./ecosystem-token
-        run: cargo test --lib --release || true
-        timeout-minutes: 30
+        run: |
+          echo "Running tests..."
+          cargo test --lib --release || true
       
       - name: Lint with clippy
         working-directory: ./ecosystem-token
-        run: cargo clippy --all-targets || true
+        run: |
+          echo "Running clippy..."
+          cargo clippy --all-targets || true
       
       - name: Check format
         working-directory: ./ecosystem-token
-        run: cargo fmt -- --check || true
+        run: |
+          echo "Checking format..."
+          cargo fmt -- --check || true
       
       - name: List build outputs
         if: always()
         run: |
-          echo "=== Build artifacts ==="
-          find ecosystem-token/target/deploy -name "*.so" -o -name "*.json" 2>/dev/null || echo "No artifacts found"
-          echo "=== IDL files ==="
-          find ecosystem-token/target/idl -type f 2>/dev/null || echo "No IDL files found"
+          echo "=== Smart Contract Binary ==="
+          find ecosystem-token/target/deploy -name "*.so" -exec ls -lh {} \; 2>/dev/null || echo "No .so files found"
+          echo ""
+          echo "=== IDL Files ==="
+          find ecosystem-token/target/idl -type f -exec ls -lh {} \; 2>/dev/null || echo "No IDL files found"
       
       - name: Upload artifacts
         if: always()
@@ -119,6 +112,9 @@ jobs:
       
       - name: Run tests
         working-directory: ./ecosystem-token
-        run: cargo test --lib || true
+        run: |
+          echo "Running unit tests..."
+          cargo test --lib || true
         timeout-minutes: 30
+
 
