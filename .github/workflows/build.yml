@@ -89,14 +89,21 @@ jobs:
         run: |
           echo "=== Building Smart Contract ==="
           
-          # Just use cargo build - Cargo.toml should configure it correctly
-          cargo build --release 2>&1 | head -100
+          # Build with cargo - Cargo.toml now has crate-type = ["cdylib"]
+          cargo build --release
           
           echo ""
-          echo "=== Checking outputs ==="
-          find target -name "*.so" -o -name "ecosystem_token*" 2>/dev/null || echo "No .so files yet"
+          echo "=== Build Outputs ==="
+          find target/release -name "*.so" -o -name "*ecosystem_token*" 2>/dev/null | head -20
           
-          echo "Build attempted"
+          echo ""
+          echo "=== Creating deploy directory ==="
+          mkdir -p ../../target/deploy
+          
+          echo "=== Copying artifacts ==="
+          cp target/release/*.so ../../target/deploy/ 2>/dev/null || echo "No .so files to copy"
+          
+          ls -lah ../../target/deploy/ || echo "Deploy directory empty"
       
       - name: Run tests
         working-directory: ./ecosystem-token
