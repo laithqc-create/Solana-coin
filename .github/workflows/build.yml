@@ -58,13 +58,12 @@ jobs:
       
       - name: Install Anchor CLI
         run: |
-          echo "=== Installing Anchor CLI ==="
-          npm install -g @coral-xyz/anchor
+          echo "=== Installing Anchor CLI via official installer ==="
+          bash -c "$(curl -sSL https://anchor-cli.anza.dev/install.sh)"
           
-          # Get npm bin directory and add to PATH
-          NPM_BIN=$(npm config get prefix)/bin
-          echo "npm bin directory: $NPM_BIN"
-          echo "$NPM_BIN" >> $GITHUB_PATH
+          # Add Anchor to PATH
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.cargo/bin:$PATH"
           
           echo "Anchor installation complete"
       
@@ -94,8 +93,10 @@ jobs:
         run: |
           echo "=== Building Smart Contract ==="
           
-          # Use npx to run anchor directly (doesn't need PATH)
-          npx @coral-xyz/anchor build --skip-lint
+          # Ensure cargo bin is in PATH
+          export PATH="$HOME/.cargo/bin:$PATH"
+          
+          anchor build --skip-lint
       
       - name: Run tests
         working-directory: ./ecosystem-token
