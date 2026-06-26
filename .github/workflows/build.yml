@@ -29,7 +29,7 @@ jobs:
           echo "npm path: $(which npm)"
       
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
       
