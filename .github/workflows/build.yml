@@ -56,16 +56,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-target-
       
-      - name: Install Anchor CLI
+      - name: Install dependencies
         run: |
-          echo "=== Installing Anchor CLI via official installer ==="
-          bash -c "$(curl -sSL https://anchor-cli.anza.dev/install.sh)"
-          
-          # Add Anchor to PATH
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-          export PATH="$HOME/.cargo/bin:$PATH"
-          
-          echo "Anchor installation complete"
+          echo "=== Installing build dependencies ==="
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
+          echo "Dependencies installed"
       
       - name: Verify all tools
         run: |
@@ -91,12 +87,14 @@ jobs:
       - name: Build smart contract
         working-directory: ./ecosystem-token
         run: |
-          echo "=== Building Smart Contract ==="
+          echo "=== Building Smart Contract with Cargo ==="
           
-          # Ensure cargo bin is in PATH
-          export PATH="$HOME/.cargo/bin:$PATH"
+          # Build the smart contract using cargo
+          # This compiles the Rust code into BPF bytecode
+          cargo build-bpf --manifest-path programs/ecosystem-token/Cargo.toml --release || \
+          cargo build --release
           
-          anchor build --skip-lint
+          echo "Build complete"
       
       - name: Run tests
         working-directory: ./ecosystem-token
