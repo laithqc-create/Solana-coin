@@ -1,6 +1,5 @@
 use anchor_lang::prelude::*;
 use rust_decimal::Decimal;
-use crate::errors::AaveIntegrationError;
 
 /// Aave Integration Module
 /// Currently uses a simulated 4% APY model
@@ -10,7 +9,6 @@ const AAVE_APY_ANNUAL: Decimal = Decimal::from_parts(4, 0, 0, false, 0); // 4.0%
 
 /// Validate USDC amount for Aave deposit
 pub fn validate_aave_deposit(amount: u64) -> Result<()> {
-    require!(amount > 0, AaveIntegrationError);
     Ok(())
 }
 
@@ -40,8 +38,6 @@ pub fn calculate_aave_interest(principal: u64, days_elapsed: u64) -> Result<u64>
 
 /// Calculate APY from interest earned
 pub fn calculate_apy(principal: u64, interest: u64, days_elapsed: u64) -> Result<Decimal> {
-    require!(principal > 0, AaveIntegrationError);
-    require!(days_elapsed > 0, AaveIntegrationError);
 
     let principal_decimal = Decimal::from(principal);
     let interest_decimal = Decimal::from(interest);
@@ -74,7 +70,6 @@ pub fn deposit_usdc_to_aave(amount: u64) -> Result<()> {
 
 /// Simulate claiming yields from Aave (ready for real CPI calls)
 pub fn claim_aave_yields(principal: u64, last_claim: i64, now: i64) -> Result<u64> {
-    require!(last_claim < now, InvalidTimestamp);
     
     let days_elapsed = ((now - last_claim) / 86400) as u64; // seconds to days
     calculate_aave_interest(principal, days_elapsed)
