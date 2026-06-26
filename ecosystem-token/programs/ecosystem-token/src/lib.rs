@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-declare_id!("EcosystemTokenProgramID123456789");
+declare_id!("EcosystemTokenProgram11111111111111111111");
 
 mod aave;
 mod errors;

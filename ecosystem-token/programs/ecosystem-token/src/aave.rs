@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 use rust_decimal::Decimal;
+use crate::errors::AaveIntegrationError;
 
 /// Aave Integration Module
 /// Currently uses a simulated 4% APY model
