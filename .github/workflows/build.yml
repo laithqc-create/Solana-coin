@@ -84,15 +84,18 @@ jobs:
           echo "=== Anchor.toml ==="
           cat ecosystem-token/Anchor.toml | head -15
       
-      - name: Build smart contract
-        working-directory: ./ecosystem-token
+      - name: Install Solana BPF target
         run: |
-          echo "=== Building Smart Contract with Cargo ==="
+          rustup target add bpfel-unknown-unknown
+          echo "BPF target installed"
+      
+      - name: Build smart contract
+        working-directory: ./ecosystem-token/programs/ecosystem-token
+        run: |
+          echo "=== Building Smart Contract with BPF target ==="
           
-          # Build the smart contract using cargo
-          # This compiles the Rust code into BPF bytecode
-          cargo build-bpf --manifest-path programs/ecosystem-token/Cargo.toml --release || \
-          cargo build --release
+          # Build for Solana BPF (proper target)
+          cargo build --target bpfel-unknown-unknown --release
           
           echo "Build complete"
       
