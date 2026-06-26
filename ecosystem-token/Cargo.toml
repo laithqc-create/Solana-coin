@@ -9,8 +9,9 @@ publish = false
 rust-version = "1.70"
 
 [workspace.dependencies]
-anchor-lang = "0.30"
-anchor-spl = "0.30"
-spl-token = "5.0"
-spl-associated-token-account = "2.3"
+solana-program = "1.17"
+anchor-lang = "0.29"
+anchor-spl = "0.29"
+spl-token = "4.1"
+spl-associated-token-account = "2.2"
 rust_decimal = "1.27"
