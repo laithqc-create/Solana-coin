@@ -556,6 +556,7 @@ pub fn resume_launchpad(ctx: Context<ResumeLaunchpad>) -> Result<()> {
 
 #[derive(Accounts)]
 #[instruction(token_bump: u8, vault_bump: u8)]
+#[derive(Accounts)]
 pub struct InitializeLaunchpad<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -607,6 +608,7 @@ pub struct InitializeLaunchpad<'info> {
 }
 
 #[derive(Accounts)]
+#[derive(Accounts)]
 pub struct InitializeTreasury<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -632,6 +634,7 @@ pub struct InitializeTreasury<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
 #[derive(Accounts)]
 pub struct MintTokens<'info> {
     #[account(mut)]
@@ -671,6 +674,7 @@ pub struct MintTokens<'info> {
 }
 
 #[derive(Accounts)]
+#[derive(Accounts)]
 pub struct RedeemTokens<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
@@ -700,6 +704,7 @@ pub struct RedeemTokens<'info> {
 }
 
 #[derive(Accounts)]
+#[derive(Accounts)]
 pub struct TransferWithTax<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
@@ -722,6 +727,7 @@ pub struct TransferWithTax<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+#[derive(Accounts)]
 #[derive(Accounts)]
 pub struct StakeTokens<'info> {
     #[account(mut)]
@@ -749,6 +755,7 @@ pub struct StakeTokens<'info> {
 }
 
 #[derive(Accounts)]
+#[derive(Accounts)]
 pub struct UnstakeTokens<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
@@ -769,6 +776,7 @@ pub struct UnstakeTokens<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+#[derive(Accounts)]
 #[derive(Accounts)]
 pub struct CreateYieldSnapshot<'info> {
     #[account(mut)]
@@ -793,6 +801,7 @@ pub struct CreateYieldSnapshot<'info> {
 }
 
 #[derive(Accounts)]
+#[derive(Accounts)]
 pub struct ClaimYield<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
@@ -816,6 +825,7 @@ pub struct ClaimYield<'info> {
 }
 
 #[derive(Accounts)]
+#[derive(Accounts)]
 pub struct SetTier2Whitelist<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -835,6 +845,7 @@ pub struct SetTier2Whitelist<'info> {
 }
 
 #[derive(Accounts)]
+#[derive(Accounts)]
 pub struct DepositToAave<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -846,6 +857,7 @@ pub struct DepositToAave<'info> {
 }
 
 #[derive(Accounts)]
+#[derive(Accounts)]
 pub struct ClaimAaveYields<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -856,6 +868,7 @@ pub struct ClaimAaveYields<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
 #[derive(Accounts)]
 pub struct DistributeRevenue<'info> {
     #[account(mut)]
@@ -871,6 +884,7 @@ pub struct DistributeRevenue<'info> {
 }
 
 #[derive(Accounts)]
+#[derive(Accounts)]
 pub struct UpdateAllocationPercentages<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -882,6 +896,7 @@ pub struct UpdateAllocationPercentages<'info> {
 }
 
 #[derive(Accounts)]
+#[derive(Accounts)]
 pub struct PauseLaunchpad<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -892,6 +907,7 @@ pub struct PauseLaunchpad<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
 #[derive(Accounts)]
 pub struct ResumeLaunchpad<'info> {
     #[account(mut)]
