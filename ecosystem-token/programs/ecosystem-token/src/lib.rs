@@ -7,6 +7,9 @@ mod errors;
 mod instructions;
 mod state;
 
+// Re-export ErrorCode at crate root so Anchor's require! macro can find it
+pub use errors::ErrorCode;
+
 use instructions::*;
 
 #[program]
