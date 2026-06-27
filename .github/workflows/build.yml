@@ -52,18 +52,13 @@ jobs:
           echo "=== Building with Solana tools ==="
           export PATH="$SOLANA_BIN:$PATH"
           
-          echo "cargo-build-sbf: $(which cargo-build-sbf 2>/dev/null || echo 'not found')"
-          echo "cargo-build-bpf: $(which cargo-build-bpf 2>/dev/null || echo 'not found')"
+          # Remove any existing Cargo.lock - Solana toolchain needs to generate its own
+          rm -f Cargo.lock programs/ecosystem-token/Cargo.lock
+          echo "Cleared Cargo.lock files"
           
-          if command -v cargo-build-sbf &> /dev/null; then
-            echo "Using cargo-build-sbf..."
-            cargo-build-sbf --manifest-path programs/ecosystem-token/Cargo.toml
-          elif command -v cargo build-sbf &> /dev/null; then
-            cargo build-sbf --manifest-path programs/ecosystem-token/Cargo.toml
-          else
-            echo "Using cargo-build-bpf..."
-            cargo-build-bpf --manifest-path programs/ecosystem-token/Cargo.toml
-          fi
+          echo "cargo-build-sbf: $(which cargo-build-sbf 2>/dev/null || echo 'not found')"
+          
+          cargo-build-sbf --manifest-path programs/ecosystem-token/Cargo.toml
 
       - name: List artifacts
         if: always()
