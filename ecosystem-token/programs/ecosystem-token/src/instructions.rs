@@ -51,11 +51,15 @@ pub fn initialize_treasury(
 ) -> Result<()> {
     let treasury = &mut ctx.accounts.treasury_vault;
     treasury.aave_position = 0;
+    treasury.rwa_balance = 0;
     treasury.total_deposited = 0;
+    treasury.total_usdc = 0;
     treasury.total_yields_earned = 0;
     treasury.total_yields_distributed = 0;
     treasury.last_aave_claim = Clock::get()?.unix_timestamp;
+    treasury.last_rwa_sync = Clock::get()?.unix_timestamp;
     treasury.authority = ctx.accounts.authority.key();
+    treasury.rwa_yield_earned = 0;
     treasury.bump = ctx.bumps.treasury_vault;
 
     let revenue_dist = &mut ctx.accounts.revenue_distribution;
@@ -64,10 +68,18 @@ pub fn initialize_treasury(
     revenue_dist.asset_manager_percentage = 20;
     revenue_dist.owner_percentage = 20;
     revenue_dist.marketing_address = marketing_address;
+    revenue_dist.marketing_pct = 20;
     revenue_dist.asset_manager_address = asset_manager_address;
+    revenue_dist.manager_pct = 20;
     revenue_dist.owner_address = owner_address;
+    revenue_dist.owner_pct = 20;
     revenue_dist.total_distributed = 0;
+    revenue_dist.user_pct = 40;
     revenue_dist.authority = ctx.accounts.authority.key();
+    revenue_dist.user_percentage = 40;
+    revenue_dist.marketing_percentage = 20;
+    revenue_dist.asset_manager_percentage = 20;
+    revenue_dist.owner_percentage = 20;
     revenue_dist.bump = ctx.bumps.revenue_distribution;
 
     Ok(())
@@ -125,7 +137,7 @@ pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -
     transfer(transfer_ctx, usdc_amount)?;
 
     // Mint tokens to user
-    let seeds = &[b"vault", &[launchpad.bump]];
+    let seeds = &[b"vault".as_ref(), &[launchpad.bump]];
     let signer_seeds = &[&seeds[..]];
 
     let mint_ctx = CpiContext::new_with_signer(
@@ -143,16 +155,12 @@ pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -
     let user_tier = &mut ctx.accounts.user_tier_info;
     user_tier.user = ctx.accounts.user.key();
     user_tier.is_tier2 = is_tier2;
+    user_tier.tokens_purchased = tokens_to_mint;
     user_tier.total_tokens_minted = tokens_to_mint;
 
     if is_tier2 {
         let now = Clock::get()?.unix_timestamp;
-        user_tier.vesting_schedule = Some(VestingSchedule {
-            start_time: now,
-            end_time: now + (365 * 24 * 3600), // 365 days
-            total_amount: tokens_to_mint,
-            claimed_amount: 0,
-        });
+        user_tier.vesting_start = now;
     }
 
     user_tier.bump = ctx.bumps.user_tier_info;
@@ -190,7 +198,7 @@ pub fn redeem_tokens(ctx: Context<RedeemTokens>, token_amount: u64) -> Result<()
     let usdc_amount = token_amount.checked_div(1_000_000).ok_or(MathOverflow)?;
 
     // Transfer USDC from vault to user
-    let seeds = &[b"vault", &[ctx.accounts.launchpad_state.bump]];
+    let seeds = &[b"vault".as_ref(), &[ctx.accounts.launchpad_state.bump]];
     let signer_seeds = &[&seeds[..]];
 
     let transfer_ctx = CpiContext::new_with_signer(
@@ -218,11 +226,16 @@ pub fn transfer_with_tax(ctx: Context<TransferWithTax>, amount: u64) -> Result<(
 
     // Check vesting lock for Tier 2
     if user_tier.is_tier2 {
-        if let Some(vesting) = &user_tier.vesting_schedule {
-            let now = Clock::get()?.unix_timestamp;
-            let vested = vesting.vested_amount(now);
-            require!(vested >= amount, CannotTransferLocked);
-        }
+        let now = Clock::get()?.unix_timestamp;
+        let vesting_start = user_tier.vesting_start;
+        let vesting_duration: i64 = 365 * 24 * 3600;
+        let elapsed = (now - vesting_start).max(0);
+        let vested = user_tier.tokens_purchased
+            .checked_mul(elapsed as u64)
+            .unwrap_or(0)
+            .checked_div(vesting_duration as u64)
+            .unwrap_or(0);
+        require!(vested >= amount, CannotTransferLocked);
     }
 
     // Calculate 0.1% tax
@@ -288,9 +301,16 @@ pub fn stake_tokens(ctx: Context<StakeTokens>, amount: u64) -> Result<()> {
 
     // Ensure tokens are not vesting-locked
     if user_tier.is_tier2 {
-        if let Some(vesting) = &user_tier.vesting_schedule {
+        {
             let now = Clock::get()?.unix_timestamp;
-            let vested = vesting.vested_amount(now);
+            let vesting_start = user_tier.vesting_start;
+            let vesting_duration: i64 = 365 * 24 * 3600;
+            let elapsed = (now - vesting_start).max(0);
+            let vested = user_tier.tokens_purchased
+                .checked_mul(elapsed as u64)
+                .unwrap_or(0)
+                .checked_div(vesting_duration as u64)
+                .unwrap_or(0);
             require!(vested >= amount, VestingLocked);
         }
     }
@@ -432,8 +452,10 @@ pub fn create_yield_snapshot(ctx: Context<CreateYieldSnapshot>) -> Result<()> {
 
     // Create new snapshot
     let snapshot = &mut ctx.accounts.yield_snapshot;
+    snapshot.snapshot_ts = now;
     snapshot.snapshot_time = now;
     snapshot.total_staked = 0; // Would be summed from all StakingInfo in production
+    snapshot.yield_amount = ctx.accounts.tax_vault.amount;
     snapshot.tax_collected = ctx.accounts.tax_vault.amount;
     snapshot.is_distributed = true;
     snapshot.bump = ctx.bumps.yield_snapshot;
@@ -441,6 +463,7 @@ pub fn create_yield_snapshot(ctx: Context<CreateYieldSnapshot>) -> Result<()> {
     // Update yield config
     yield_config.last_snapshot = now;
     yield_config.next_snapshot = now + yield_config.snapshot_frequency;
+    yield_config.snapshot_frequency = yield_config.snapshot_frequency;
 
     Ok(())
 }
@@ -455,7 +478,7 @@ pub fn claim_yield(ctx: Context<ClaimYield>) -> Result<()> {
 
     // Calculate pro-rata yield
     let user_share = (staking_info.staked_amount as u128)
-        .checked_mul(snapshot.tax_collected as u128)
+        .checked_mul(snapshot.yield_amount as u128)
         .ok_or(MathOverflow)?
         .checked_div(snapshot.total_staked as u128)
         .ok_or(MathOverflow)? as u64;
@@ -476,6 +499,7 @@ pub fn claim_yield(ctx: Context<ClaimYield>) -> Result<()> {
     // Update staking info
     let mut staking_mut = ctx.accounts.staking_info.clone();
     staking_mut.last_claim = Clock::get()?.unix_timestamp;
+    staking_mut.last_claim_ts = Clock::get()?.unix_timestamp;
     staking_mut.total_yield_claimed = staking_mut
         .total_yield_claimed
         .checked_add(user_share)
@@ -567,7 +591,7 @@ pub fn claim_rwa_yields(ctx: Context<ClaimRwaYields>) -> Result<()> {
     require!(interest > 0, NoRwaYield);
 
     treasury.rwa_yield_earned = treasury
-        .rwa_yield_earned
+        .total_yields_earned
         .checked_add(interest)
         .ok_or(MathOverflow)?;
 
@@ -599,25 +623,25 @@ pub fn distribute_revenue(ctx: Context<DistributeRevenue>) -> Result<()> {
 
     // Calculate distributions
     let user_share = available
-        .checked_mul(revenue_dist.user_percentage as u64)
+        .checked_mul(revenue_dist.user_pct as u64)
         .ok_or(MathOverflow)?
         .checked_div(100)
         .ok_or(MathOverflow)?;
     
     let marketing_share = available
-        .checked_mul(revenue_dist.marketing_percentage as u64)
+        .checked_mul(revenue_dist.marketing_pct as u64)
         .ok_or(MathOverflow)?
         .checked_div(100)
         .ok_or(MathOverflow)?;
 
     let manager_share = available
-        .checked_mul(revenue_dist.asset_manager_percentage as u64)
+        .checked_mul(revenue_dist.manager_pct as u64)
         .ok_or(MathOverflow)?
         .checked_div(100)
         .ok_or(MathOverflow)?;
 
     let owner_share = available
-        .checked_mul(revenue_dist.owner_percentage as u64)
+        .checked_mul(revenue_dist.owner_pct as u64)
         .ok_or(MathOverflow)?
         .checked_div(100)
         .ok_or(MathOverflow)?;
@@ -646,9 +670,13 @@ pub fn update_allocation_percentages(
     );
 
     let revenue_dist = &mut ctx.accounts.revenue_distribution;
+    revenue_dist.user_pct = user_pct;
     revenue_dist.user_percentage = user_pct;
+    revenue_dist.marketing_pct = marketing_pct;
     revenue_dist.marketing_percentage = marketing_pct;
+    revenue_dist.manager_pct = manager_pct;
     revenue_dist.asset_manager_percentage = manager_pct;
+    revenue_dist.owner_pct = owner_pct;
     revenue_dist.owner_percentage = owner_pct;
 
     Ok(())
@@ -949,7 +977,7 @@ pub struct CreateYieldSnapshot<'info> {
         init,
         payer = authority,
         space = 8 + 8 * 2 + 8 + 1 + 1,
-        seeds = [b"yield-snapshot", &Clock::get()?.unix_timestamp.to_le_bytes()],
+        seeds = [b"yield-snapshot".as_ref(), &Clock::get()?.unix_timestamp.to_le_bytes()],
         bump
     )]
     pub yield_snapshot: Account<'info, YieldSnapshot>,
