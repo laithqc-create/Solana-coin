@@ -6,12 +6,3 @@ resolver = "2"
 edition = "2021"
 version = "0.1.0"
 publish = false
-rust-version = "1.70"
-
-[workspace.dependencies]
-solana-program = "1.17"
-anchor-lang = "0.29"
-anchor-spl = "0.29"
-spl-token = "9.0"
-spl-associated-token-account = "3.0"
-rust_decimal = "1.27"

@@ -5,15 +5,14 @@ edition = "2021"
 publish = false
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "lib"]
 
 [dependencies]
-anchor-lang = { workspace = true }
-anchor-spl = { workspace = true }
-solana-program = { workspace = true }
-spl-token = { workspace = true }
-spl-associated-token-account = { workspace = true }
-rust_decimal = { workspace = true }
+anchor-lang = "0.29.0"
 
 [features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
 default = []
