@@ -8,7 +8,11 @@ publish = false
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
-anchor-lang = "0.29.0"
+anchor-lang = { workspace = true, features = ["init-if-needed"] }
+anchor-spl = { workspace = true }
+spl-token = { workspace = true }
+spl-associated-token-account = { workspace = true }
+rust_decimal = { workspace = true }
 
 [features]
 no-entrypoint = []
