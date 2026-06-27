@@ -1,0 +1,8 @@
+# Cargo lock - let Solana toolchain generate its own
+Cargo.lock
+
+# Build artifacts
+target/
+
+# IDL
+idl/
