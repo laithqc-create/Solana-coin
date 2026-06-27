@@ -15,36 +15,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
-
       - name: Install Solana tools from GitHub
         run: |
           echo "=== Downloading Solana from GitHub releases ==="
           curl -L --retry 3 \
             https://github.com/anza-xyz/agave/releases/download/v1.18.26/solana-release-x86_64-unknown-linux-gnu.tar.bz2 \
             -o solana.tar.bz2
-          
-          echo "Extracting..."
           tar -xjf solana.tar.bz2
           
           SOLANA_BIN="$(pwd)/solana-release/bin"
-          echo "Solana bin: $SOLANA_BIN"
           echo "$SOLANA_BIN" >> $GITHUB_PATH
           echo "SOLANA_BIN=$SOLANA_BIN" >> $GITHUB_ENV
           
           export PATH="$SOLANA_BIN:$PATH"
           solana --version
-          ls "$SOLANA_BIN" | grep -i cargo
 
       - name: Build smart contract
         working-directory: ./ecosystem-token
@@ -52,22 +36,23 @@ jobs:
           echo "=== Building with Solana tools ==="
           export PATH="$SOLANA_BIN:$PATH"
           
-          # Remove any existing Cargo.lock - Solana toolchain needs to generate its own
-          rm -f Cargo.lock programs/ecosystem-token/Cargo.lock
-          echo "Cleared Cargo.lock files"
+          # Ensure no stale lock files
+          find . -name "Cargo.lock" -delete
+          echo "Cleared any Cargo.lock files"
           
-          echo "cargo-build-sbf: $(which cargo-build-sbf 2>/dev/null || echo 'not found')"
+          # Use Solana's own cargo, not system cargo
+          SOLANA_CARGO="$SOLANA_BIN/cargo"
+          if [ -f "$SOLANA_CARGO" ]; then
+            echo "Using Solana bundled cargo: $SOLANA_CARGO"
+          fi
           
           cargo-build-sbf --manifest-path programs/ecosystem-token/Cargo.toml
 
       - name: List artifacts
         if: always()
         run: |
-          echo "=== Searching entire workspace for .so files ==="
-          find /home/runner/work -name "*.so" 2>/dev/null | head -20 || echo "No .so files found anywhere"
-          echo ""
-          echo "=== ecosystem-token/target contents ==="
-          ls -la ecosystem-token/target/ 2>/dev/null || echo "No target dir"
+          echo "=== Searching for .so files ==="
+          find /home/runner/work -name "*.so" 2>/dev/null | head -20 || echo "No .so files"
 
       - name: Upload artifacts
         if: always()
@@ -77,7 +62,6 @@ jobs:
           path: |
             ecosystem-token/target/deploy/*.so
             ecosystem-token/target/sbf-solana-solana/release/*.so
-            ecosystem-token/target/bpfel-unknown-unknown/release/*.so
           retention-days: 30
           if-no-files-found: warn
 
