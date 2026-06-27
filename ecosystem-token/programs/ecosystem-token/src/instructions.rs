@@ -775,6 +775,7 @@ pub struct MintTokens<'info> {
     pub vault_pda: UncheckedAccount<'info>,
 
     #[account(
+        init_if_needed,
         payer = user,
         space = 8 + 32 + 1 + 50 + 8 + 1,
         seeds = [b"user-tier", user.key().as_ref()],
@@ -853,6 +854,7 @@ pub struct StakeTokens<'info> {
     pub user_tier_info: Account<'info, UserTierInfo>,
 
     #[account(
+        init_if_needed,
         payer = user,
         space = 8 + 32 + 8 * 4 + 1,
         seeds = [b"staking", user.key().as_ref()],
@@ -987,6 +989,7 @@ pub struct SetTier2Whitelist<'info> {
     pub target_user: UncheckedAccount<'info>,
 
     #[account(
+        init,
         payer = authority,
         space = 8 + 32 + 1 + 8 + 32 + 1,
         seeds = [b"whitelist", target_user.key().as_ref()],
