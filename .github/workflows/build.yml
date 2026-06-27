@@ -37,32 +37,42 @@ jobs:
           echo "Extracting..."
           tar -xjf solana.tar.bz2
           
-          echo "Adding to PATH..."
-          echo "$(pwd)/solana-release/bin" >> $GITHUB_PATH
-          export PATH="$(pwd)/solana-release/bin:$PATH"
+          SOLANA_BIN="$(pwd)/solana-release/bin"
+          echo "Solana bin: $SOLANA_BIN"
+          echo "$SOLANA_BIN" >> $GITHUB_PATH
+          echo "SOLANA_BIN=$SOLANA_BIN" >> $GITHUB_ENV
           
-          echo "Verifying..."
+          export PATH="$SOLANA_BIN:$PATH"
           solana --version
-          cargo build-sbf --version || cargo build-bpf --version || echo "sbf tool check done"
+          ls "$SOLANA_BIN" | grep -i cargo
 
       - name: Build smart contract
         working-directory: ./ecosystem-token
         run: |
           echo "=== Building with Solana tools ==="
-          export PATH="$(pwd)/../solana-release/bin:$PATH"
+          export PATH="$SOLANA_BIN:$PATH"
           
-          # Try cargo build-sbf first (newer), fall back to build-bpf
+          echo "cargo-build-sbf: $(which cargo-build-sbf 2>/dev/null || echo 'not found')"
+          echo "cargo-build-bpf: $(which cargo-build-bpf 2>/dev/null || echo 'not found')"
+          
           if command -v cargo-build-sbf &> /dev/null; then
+            echo "Using cargo-build-sbf..."
+            cargo-build-sbf --manifest-path programs/ecosystem-token/Cargo.toml
+          elif command -v cargo build-sbf &> /dev/null; then
             cargo build-sbf --manifest-path programs/ecosystem-token/Cargo.toml
           else
-            cargo build-bpf --manifest-path programs/ecosystem-token/Cargo.toml
+            echo "Using cargo-build-bpf..."
+            cargo-build-bpf --manifest-path programs/ecosystem-token/Cargo.toml
           fi
 
       - name: List artifacts
         if: always()
         run: |
-          echo "=== Build Artifacts ==="
-          find . -name "*.so" 2>/dev/null | head -20 || echo "No .so files"
+          echo "=== Searching entire workspace for .so files ==="
+          find /home/runner/work -name "*.so" 2>/dev/null | head -20 || echo "No .so files found anywhere"
+          echo ""
+          echo "=== ecosystem-token/target contents ==="
+          ls -la ecosystem-token/target/ 2>/dev/null || echo "No target dir"
 
       - name: Upload artifacts
         if: always()
@@ -72,6 +82,7 @@ jobs:
           path: |
             ecosystem-token/target/deploy/*.so
             ecosystem-token/target/sbf-solana-solana/release/*.so
+            ecosystem-token/target/bpfel-unknown-unknown/release/*.so
           retention-days: 30
           if-no-files-found: warn
 
