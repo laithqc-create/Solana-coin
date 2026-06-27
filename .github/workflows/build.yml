@@ -15,53 +15,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Solana tools from GitHub
-        run: |
-          echo "=== Downloading Solana from GitHub releases ==="
-          curl -L --retry 3 \
-            https://github.com/anza-xyz/agave/releases/download/v1.18.26/solana-release-x86_64-unknown-linux-gnu.tar.bz2 \
-            -o solana.tar.bz2
-          tar -xjf solana.tar.bz2
-          
-          SOLANA_BIN="$(pwd)/solana-release/bin"
-          echo "$SOLANA_BIN" >> $GITHUB_PATH
-          echo "SOLANA_BIN=$SOLANA_BIN" >> $GITHUB_ENV
-          
-          export PATH="$SOLANA_BIN:$PATH"
-          solana --version
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
 
       - name: Build smart contract
-        working-directory: ./ecosystem-token
+        working-directory: ./ecosystem-token/programs/ecosystem-token
         run: |
-          echo "=== Building with Solana tools ==="
-          export PATH="$SOLANA_BIN:$PATH"
-          
-          # Ensure no stale lock files
-          find . -name "Cargo.lock" -delete
-          echo "Cleared any Cargo.lock files"
-          
-          # Use Solana's own cargo, not system cargo
-          SOLANA_CARGO="$SOLANA_BIN/cargo"
-          if [ -f "$SOLANA_CARGO" ]; then
-            echo "Using Solana bundled cargo: $SOLANA_CARGO"
-          fi
-          
-          cargo-build-sbf --manifest-path programs/ecosystem-token/Cargo.toml
+          echo "=== Building ==="
+          cargo build --release
+          echo "=== Finding outputs ==="
+          find target -name "*.so" -o -name "*ecosystem*" 2>/dev/null | head -20
 
-      - name: List artifacts
+      - name: Collect artifact
         if: always()
         run: |
-          echo "=== Searching for .so files ==="
-          find /home/runner/work -name "*.so" 2>/dev/null | head -20 || echo "No .so files"
+          mkdir -p artifacts
+          # Find the .so wherever it is
+          find ecosystem-token -name "*.so" 2>/dev/null -exec cp {} artifacts/ \;
+          # Also copy any dylib
+          find ecosystem-token -name "*ecosystem_token*" 2>/dev/null -exec cp {} artifacts/ \; || true
+          echo "=== Artifacts collected ==="
+          ls -lah artifacts/
 
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
-          path: |
-            ecosystem-token/target/deploy/*.so
-            ecosystem-token/target/sbf-solana-solana/release/*.so
+          path: artifacts/
           retention-days: 30
           if-no-files-found: warn
 
