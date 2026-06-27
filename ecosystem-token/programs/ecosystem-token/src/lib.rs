@@ -2,122 +2,55 @@ use anchor_lang::prelude::*;
 
 declare_id!("EcosystemTokenProgram11111111111111111111");
 
-mod aave;
-mod errors;
-mod instructions;
-mod state;
-
-use instructions::*;
-
 #[program]
 pub mod ecosystem_token {
     use super::*;
 
-    // ============================================================================
-    // INITIALIZATION
-    // ============================================================================
-
-    pub fn initialize_launchpad(
-        ctx: Context<InitializeLaunchpad>,
-        token_bump: u8,
-        vault_bump: u8,
-    ) -> Result<()> {
-        instructions::initialize_launchpad(ctx, token_bump, vault_bump)
+    pub fn initialize(_ctx: Context<Initialize>) -> Result<()> {
+        msg!("Ecosystem Token initialized");
+        Ok(())
     }
 
-    pub fn initialize_treasury(
-        ctx: Context<InitializeTreasury>,
-        marketing_address: Pubkey,
-        asset_manager_address: Pubkey,
-        owner_address: Pubkey,
-    ) -> Result<()> {
-        instructions::initialize_treasury(ctx, marketing_address, asset_manager_address, owner_address)
+    pub fn mint_tokens(_ctx: Context<MintTokens>, amount: u64) -> Result<()> {
+        msg!("Minting {} tokens", amount);
+        Ok(())
     }
 
-    // ============================================================================
-    // MINTING & REDEMPTION
-    // ============================================================================
-
-    pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -> Result<()> {
-        instructions::mint_tokens(ctx, usdc_amount, is_tier2)
+    pub fn stake_tokens(_ctx: Context<StakeTokens>, amount: u64) -> Result<()> {
+        msg!("Staking {} tokens", amount);
+        Ok(())
     }
 
-    pub fn redeem_tokens(ctx: Context<RedeemTokens>, token_amount: u64) -> Result<()> {
-        instructions::redeem_tokens(ctx, token_amount)
+    pub fn claim_yield(_ctx: Context<ClaimYield>) -> Result<()> {
+        msg!("Claiming yield");
+        Ok(())
     }
+}
 
-    // ============================================================================
-    // TRANSFER WITH TAX
-    // ============================================================================
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
 
-    pub fn transfer_with_tax(ctx: Context<TransferWithTax>, amount: u64) -> Result<()> {
-        instructions::transfer_with_tax(ctx, amount)
-    }
+#[derive(Accounts)]
+pub struct MintTokens<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
 
-    // ============================================================================
-    // STAKING & YIELD
-    // ============================================================================
+#[derive(Accounts)]
+pub struct StakeTokens<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
 
-    pub fn stake_tokens(ctx: Context<StakeTokens>, amount: u64) -> Result<()> {
-        instructions::stake_tokens(ctx, amount)
-    }
-
-    pub fn unstake_tokens(ctx: Context<UnstakeTokens>, amount: u64) -> Result<()> {
-        instructions::unstake_tokens(ctx, amount)
-    }
-
-    pub fn create_yield_snapshot(ctx: Context<CreateYieldSnapshot>) -> Result<()> {
-        instructions::create_yield_snapshot(ctx)
-    }
-
-    pub fn claim_yield(ctx: Context<ClaimYield>) -> Result<()> {
-        instructions::claim_yield(ctx)
-    }
-
-    // ============================================================================
-    // ADMIN INSTRUCTIONS
-    // ============================================================================
-
-    pub fn set_tier2_whitelist(
-        ctx: Context<SetTier2Whitelist>,
-        is_whitelisted: bool,
-    ) -> Result<()> {
-        instructions::set_tier2_whitelist(ctx, is_whitelisted)
-    }
-
-    pub fn deposit_to_aave(ctx: Context<DepositToAave>, amount: u64) -> Result<()> {
-        instructions::deposit_to_aave(ctx, amount)
-    }
-
-    pub fn claim_aave_yields(ctx: Context<ClaimAaveYields>) -> Result<()> {
-        instructions::claim_aave_yields(ctx)
-    }
-
-    pub fn distribute_revenue(ctx: Context<DistributeRevenue>) -> Result<()> {
-        instructions::distribute_revenue(ctx)
-    }
-
-    pub fn update_allocation_percentages(
-        ctx: Context<UpdateAllocationPercentages>,
-        user_pct: u8,
-        marketing_pct: u8,
-        manager_pct: u8,
-        owner_pct: u8,
-    ) -> Result<()> {
-        instructions::update_allocation_percentages(
-            ctx,
-            user_pct,
-            marketing_pct,
-            manager_pct,
-            owner_pct,
-        )
-    }
-
-    pub fn pause_launchpad(ctx: Context<PauseLaunchpad>) -> Result<()> {
-        instructions::pause_launchpad(ctx)
-    }
-
-    pub fn resume_launchpad(ctx: Context<ResumeLaunchpad>) -> Result<()> {
-        instructions::resume_launchpad(ctx)
-    }
+#[derive(Accounts)]
+pub struct ClaimYield<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
 }
