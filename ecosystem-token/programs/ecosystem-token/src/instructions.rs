@@ -319,11 +319,59 @@ pub fn stake_tokens(ctx: Context<StakeTokens>, amount: u64) -> Result<()> {
     Ok(())
 }
 
-pub fn unstake_tokens(ctx: Context<UnstakeTokens>, amount: u64) -> Result<()> {
+/// Step 1 of 2 for unstaking: starts the 48 business-hour countdown.
+/// During this period, the off-chain keeper routes funds from RUSDY → USDC via Jupiter.
+/// The user sees a countdown timer in the dashboard with weekend-pause logic.
+pub fn request_unstake(ctx: Context<RequestUnstake>, amount: u64) -> Result<()> {
     require!(amount > 0, InsufficientTokens);
 
     let staking_info = &mut ctx.accounts.staking_info;
     require!(staking_info.staked_amount >= amount, NoStakedTokens);
+
+    let now = Clock::get()?.unix_timestamp;
+
+    // Deduct from staked balance immediately
+    staking_info.staked_amount = staking_info
+        .staked_amount
+        .checked_sub(amount)
+        .ok_or(MathOverflow)?;
+
+    // Record the unstaking request with timestamp for countdown
+    let request = &mut ctx.accounts.unstaking_request;
+    request.user = ctx.accounts.user.key();
+    request.amount = amount;
+    request.usdc_to_return = amount; // 1:1 peg (USDC equivalent)
+    request.requested_at = now;
+    request.completed = false;
+    request.emergency_redeemed = false;
+    request.bump = ctx.bumps.unstaking_request;
+
+    msg!(
+        "Unstake requested: {} tokens. Your funds are being routed from RUSDY (real world assets) back to USDC. This may take up to 48 business hours due to regulatory requirements. Timer pauses on weekends.",
+        amount
+    );
+
+    Ok(())
+}
+
+/// Step 2 of 2: Complete the unstake after 48 business hours have elapsed.
+/// Weekends do NOT count toward the 48-hour requirement.
+pub fn complete_unstake(ctx: Context<CompleteUnstake>) -> Result<()> {
+    let request = &mut ctx.accounts.unstaking_request;
+    require!(!request.completed, UnstakeAlreadyCompleted);
+    require!(!request.emergency_redeemed, UnstakeAlreadyCompleted);
+
+    let now = Clock::get()?.unix_timestamp;
+
+    // Calculate business seconds elapsed (Mon–Fri only, weekends excluded)
+    let elapsed = crate::rwa::business_seconds_elapsed(request.requested_at, now);
+
+    require!(
+        elapsed >= crate::rwa::UNSTAKE_BUSINESS_SECONDS,
+        UnstakeCooldownNotMet
+    );
+
+    request.completed = true;
 
     // Transfer tokens back to user
     let transfer_ctx = CpiContext::new(
@@ -331,15 +379,47 @@ pub fn unstake_tokens(ctx: Context<UnstakeTokens>, amount: u64) -> Result<()> {
         Transfer {
             from: ctx.accounts.staking_vault.to_account_info(),
             to: ctx.accounts.user_token_ata.to_account_info(),
-            authority: ctx.accounts.user.to_account_info(),
+            authority: ctx.accounts.staking_vault.to_account_info(),
+        },
+    );
+    transfer(transfer_ctx, request.amount)?;
+
+    msg!(
+        "Unstake complete: {} tokens returned to user after 48 business hours.",
+        request.amount
+    );
+
+    Ok(())
+}
+
+/// Emergency DeFi redemption: bypasses the 48hr wait but exposes
+/// the user to AMM slippage because RUSDY must be swapped immediately
+/// via Jupiter at current market prices rather than via DCA routing.
+pub fn emergency_redeem_defi(ctx: Context<EmergencyRedeemDefi>) -> Result<()> {
+    let request = &mut ctx.accounts.unstaking_request;
+    require!(!request.completed, UnstakeAlreadyCompleted);
+    require!(!request.emergency_redeemed, UnstakeAlreadyCompleted);
+
+    let amount = request.amount;
+    request.emergency_redeemed = true;
+    request.completed = true;
+
+    // In production: trigger immediate Jupiter swap RUSDY → USDC
+    // Slippage is NOT protected here — user accepts AMM market risk
+    let transfer_ctx = CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.staking_vault.to_account_info(),
+            to: ctx.accounts.user_token_ata.to_account_info(),
+            authority: ctx.accounts.staking_vault.to_account_info(),
         },
     );
     transfer(transfer_ctx, amount)?;
 
-    staking_info.staked_amount = staking_info
-        .staked_amount
-        .checked_sub(amount)
-        .ok_or(MathOverflow)?;
+    msg!(
+        "EMERGENCY DeFi redemption executed: {} tokens. WARNING: Your transaction was subject to potential high slippage due to AMM market conditions. This is a result of bypassing the standard 48-hour DCA routing process.",
+        amount
+    );
 
     Ok(())
 }
@@ -426,46 +506,82 @@ pub fn set_tier2_whitelist(
     Ok(())
 }
 
-pub fn deposit_to_aave(ctx: Context<DepositToAave>, amount: u64) -> Result<()> {
-    require!(amount > 0, InsufficientUsdc);
+/// Invest treasury USDC into RUSDY via Jupiter DCA routing.
+/// 70% of treasury tax goes here (replacing Aave).
+/// Actual Jupiter swap is executed by off-chain keeper to prevent MEV.
+pub fn invest_in_rwa(ctx: Context<InvestInRwa>, amount: u64) -> Result<()> {
+    require!(amount > 0, InvalidRwaAmount);
 
     let treasury = &mut ctx.accounts.treasury_vault;
-    
-    // Validate deposit
-    crate::aave::validate_aave_deposit(amount)?;
+    let yield_config = &mut ctx.accounts.yield_config;
+    let now = Clock::get()?.unix_timestamp;
 
-    // Transfer USDC to Aave (simulated)
-    // In production: Call Aave LendingPool.deposit() via CPI
-    
-    treasury.aave_position = treasury
-        .aave_position
-        .checked_add(amount)
+    // Validate we have enough treasury balance
+    require!(treasury.total_usdc >= amount, InsufficientTreasury);
+
+    // Calculate USDC to route through Jupiter DCA → RUSDY
+    let usdc_to_invest = crate::rwa::record_rwa_investment(amount, 70);
+
+    // Update state: record pending RUSDY investment
+    treasury.rwa_balance = treasury
+        .rwa_balance
+        .checked_add(usdc_to_invest)
         .ok_or(MathOverflow)?;
-    treasury.total_deposited = treasury
-        .total_deposited
-        .checked_add(amount)
+
+    treasury.total_usdc = treasury
+        .total_usdc
+        .checked_sub(usdc_to_invest)
         .ok_or(MathOverflow)?;
+
+    yield_config.rwa_invested_usdc = yield_config
+        .rwa_invested_usdc
+        .checked_add(usdc_to_invest)
+        .ok_or(MathOverflow)?;
+
+    yield_config.last_investment_ts = now;
+
+    msg!(
+        "RWA investment queued: {} USDC routed to RUSDY via Jupiter DCA. Keeper will execute swap across multiple blocks to minimize slippage.",
+        usdc_to_invest
+    );
 
     Ok(())
 }
 
-pub fn claim_aave_yields(ctx: Context<ClaimAaveYields>) -> Result<()> {
+/// Claim yield earned on RUSDY investment.
+/// Yield accrues at ~5% APY on the invested USDC equivalent.
+pub fn claim_rwa_yields(ctx: Context<ClaimRwaYields>) -> Result<()> {
     let treasury = &mut ctx.accounts.treasury_vault;
+    let yield_config = &mut ctx.accounts.yield_config;
     let now = Clock::get()?.unix_timestamp;
 
-    let interest = crate::aave::claim_aave_yields(
-        treasury.aave_position,
-        treasury.last_aave_claim,
-        now,
+    let seconds_elapsed = now
+        .checked_sub(yield_config.last_investment_ts)
+        .unwrap_or(0) as u64;
+
+    let interest = crate::rwa::calculate_rwa_yield(
+        yield_config.rwa_invested_usdc,
+        seconds_elapsed,
     )?;
 
-    require!(interest > 0, NoYieldToClaim);
+    require!(interest > 0, NoRwaYield);
+
+    treasury.rwa_yield_earned = treasury
+        .rwa_yield_earned
+        .checked_add(interest)
+        .ok_or(MathOverflow)?;
 
     treasury.total_yields_earned = treasury
         .total_yields_earned
         .checked_add(interest)
         .ok_or(MathOverflow)?;
-    treasury.last_aave_claim = now;
+
+    yield_config.last_investment_ts = now;
+
+    msg!(
+        "RUSDY yield claimed: {} USDC earned from RWA investment at ~5% APY.",
+        interest
+    );
 
     Ok(())
 }
@@ -749,7 +865,31 @@ pub struct StakeTokens<'info> {
 }
 
 #[derive(Accounts)]
-pub struct UnstakeTokens<'info> {
+pub struct RequestUnstake<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"staking", user.key().as_ref()],
+        bump = staking_info.bump
+    )]
+    pub staking_info: Account<'info, StakingInfo>,
+
+    #[account(
+        init,
+        payer = user,
+        space = 8 + 32 + 8 + 8 + 8 + 1 + 1 + 1,
+        seeds = [b"unstaking", user.key().as_ref()],
+        bump
+    )]
+    pub unstaking_request: Account<'info, UnstakingRequest>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct CompleteUnstake<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
@@ -761,10 +901,33 @@ pub struct UnstakeTokens<'info> {
 
     #[account(
         mut,
-        seeds = [b"staking", user.key().as_ref()],
-        bump = staking_info.bump
+        seeds = [b"unstaking", user.key().as_ref()],
+        bump = unstaking_request.bump,
+        has_one = user
     )]
-    pub staking_info: Account<'info, StakingInfo>,
+    pub unstaking_request: Account<'info, UnstakingRequest>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct EmergencyRedeemDefi<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(mut)]
+    pub user_token_ata: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub staking_vault: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        seeds = [b"unstaking", user.key().as_ref()],
+        bump = unstaking_request.bump,
+        has_one = user
+    )]
+    pub unstaking_request: Account<'info, UnstakingRequest>,
 
     pub token_program: Program<'info, Token>,
 }
@@ -835,23 +998,29 @@ pub struct SetTier2Whitelist<'info> {
 }
 
 #[derive(Accounts)]
-pub struct DepositToAave<'info> {
+pub struct InvestInRwa<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
     #[account(mut, seeds = [b"treasury-vault"], bump = treasury_vault.bump)]
     pub treasury_vault: Account<'info, TreasuryVault>,
+
+    #[account(mut, seeds = [b"yield-config"], bump = yield_config.bump)]
+    pub yield_config: Account<'info, YieldConfig>,
 
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-pub struct ClaimAaveYields<'info> {
+pub struct ClaimRwaYields<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
     #[account(mut, seeds = [b"treasury-vault"], bump = treasury_vault.bump)]
     pub treasury_vault: Account<'info, TreasuryVault>,
+
+    #[account(mut, seeds = [b"yield-config"], bump = yield_config.bump)]
+    pub yield_config: Account<'info, YieldConfig>,
 
     pub system_program: Program<'info, System>,
 }

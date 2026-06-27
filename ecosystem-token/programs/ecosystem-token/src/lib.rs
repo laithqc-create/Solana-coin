@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 declare_id!("11111111111111111111111111111112");
 
-mod aave;
+mod rwa;
 mod errors;
 mod instructions;
 mod state;
@@ -62,8 +62,16 @@ pub mod ecosystem_token {
         instructions::stake_tokens(ctx, amount)
     }
 
-    pub fn unstake_tokens(ctx: Context<UnstakeTokens>, amount: u64) -> Result<()> {
-        instructions::unstake_tokens(ctx, amount)
+    pub fn request_unstake(ctx: Context<RequestUnstake>, amount: u64) -> Result<()> {
+        instructions::request_unstake(ctx, amount)
+    }
+
+    pub fn complete_unstake(ctx: Context<CompleteUnstake>) -> Result<()> {
+        instructions::complete_unstake(ctx)
+    }
+
+    pub fn emergency_redeem_defi(ctx: Context<EmergencyRedeemDefi>) -> Result<()> {
+        instructions::emergency_redeem_defi(ctx)
     }
 
     pub fn create_yield_snapshot(ctx: Context<CreateYieldSnapshot>) -> Result<()> {
@@ -85,12 +93,12 @@ pub mod ecosystem_token {
         instructions::set_tier2_whitelist(ctx, is_whitelisted)
     }
 
-    pub fn deposit_to_aave(ctx: Context<DepositToAave>, amount: u64) -> Result<()> {
-        instructions::deposit_to_aave(ctx, amount)
+    pub fn invest_in_rwa(ctx: Context<InvestInRwa>, amount: u64) -> Result<()> {
+        instructions::invest_in_rwa(ctx, amount)
     }
 
-    pub fn claim_aave_yields(ctx: Context<ClaimAaveYields>) -> Result<()> {
-        instructions::claim_aave_yields(ctx)
+    pub fn claim_rwa_yields(ctx: Context<ClaimRwaYields>) -> Result<()> {
+        instructions::claim_rwa_yields(ctx)
     }
 
     pub fn distribute_revenue(ctx: Context<DistributeRevenue>) -> Result<()> {
