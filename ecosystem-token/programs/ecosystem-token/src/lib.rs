@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-declare_id!("EcosystemTokenProgram11111111111111111111");
+declare_id!("11111111111111111111111111111112");
 
 #[program]
 pub mod ecosystem_token {

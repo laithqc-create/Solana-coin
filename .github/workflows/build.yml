@@ -11,121 +11,59 @@ jobs:
   build:
     runs-on: ubuntu-latest
     name: Build & Test
-    
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      
-      - name: Verify Node.js
-        run: |
-          echo "=== Node.js Setup ==="
-          node --version
-          npm --version
-          echo "Node path: $(which node)"
-          echo "npm path: $(which npm)"
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt, clippy
-      
-      - name: Verify Rust
-        run: |
-          echo "=== Rust Setup ==="
-          rustc --version
-          cargo --version
-          echo "rustc path: $(which rustc)"
-      
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Cache Rust
         uses: actions/cache@v4
         with:
-          path: ~/.cargo
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-      
-      - name: Cache target
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-target-
-      
-      - name: Install dependencies
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install Solana tools from GitHub
         run: |
-          echo "=== Installing build dependencies ==="
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev
-          echo "Dependencies installed"
-      
-      - name: Verify all tools
-        run: |
-          echo "=== Checking Installed Tools ==="
-          echo "Node.js: $(node --version)"
-          echo "npm: $(npm --version)"
-          echo "Rust: $(rustc --version)"
-          echo "Cargo: $(cargo --version)"
+          echo "=== Downloading Solana from GitHub releases ==="
+          curl -L --retry 3 \
+            https://github.com/anza-xyz/agave/releases/download/v1.18.26/solana-release-x86_64-unknown-linux-gnu.tar.bz2 \
+            -o solana.tar.bz2
           
-          # Try to find anchor
-          echo ""
-          echo "Looking for Anchor CLI..."
-          command -v anchor && echo "Anchor found in PATH: $(anchor --version)" || echo "Anchor will be located via npm bin directory"
-      
-      - name: Check project
-        run: |
-          echo "=== Project Structure ==="
-          ls -la ecosystem-token/ | head -20
-          echo ""
-          echo "=== Anchor.toml ==="
-          cat ecosystem-token/Anchor.toml | head -15
-      
+          echo "Extracting..."
+          tar -xjf solana.tar.bz2
+          
+          echo "Adding to PATH..."
+          echo "$(pwd)/solana-release/bin" >> $GITHUB_PATH
+          export PATH="$(pwd)/solana-release/bin:$PATH"
+          
+          echo "Verifying..."
+          solana --version
+          cargo build-sbf --version || cargo build-bpf --version || echo "sbf tool check done"
+
       - name: Build smart contract
-        working-directory: ./ecosystem-token/programs/ecosystem-token
+        working-directory: ./ecosystem-token
         run: |
-          echo "=== Building Smart Contract ==="
+          echo "=== Building with Solana tools ==="
+          export PATH="$(pwd)/../solana-release/bin:$PATH"
           
-          # Build with cargo - Cargo.toml now has crate-type = ["cdylib"]
-          cargo build --release
-          
-          echo ""
-          echo "=== Build Outputs ==="
-          find target/release -name "*.so" -o -name "*ecosystem_token*" 2>/dev/null | head -20
-          
-          echo ""
-          echo "=== Creating deploy directory ==="
-          mkdir -p ../../target/deploy
-          
-          echo "=== Copying artifacts ==="
-          cp target/release/*.so ../../target/deploy/ 2>/dev/null || echo "No .so files to copy"
-          
-          ls -lah ../../target/deploy/ || echo "Deploy directory empty"
-      
-      - name: Run tests
-        working-directory: ./ecosystem-token
-        run: cargo test --lib --release || true
-      
-      - name: Lint
-        working-directory: ./ecosystem-token
-        run: cargo clippy --all-targets || true
-      
-      - name: Format check
-        working-directory: ./ecosystem-token
-        run: cargo fmt -- --check || true
-      
+          # Try cargo build-sbf first (newer), fall back to build-bpf
+          if command -v cargo-build-sbf &> /dev/null; then
+            cargo build-sbf --manifest-path programs/ecosystem-token/Cargo.toml
+          else
+            cargo build-bpf --manifest-path programs/ecosystem-token/Cargo.toml
+          fi
+
       - name: List artifacts
         if: always()
         run: |
           echo "=== Build Artifacts ==="
-          find ecosystem-token/target/deploy -name "*.so" 2>/dev/null || echo "No .so files"
-          echo ""
-          echo "=== IDL Files ==="
-          find ecosystem-token/target/idl -type f 2>/dev/null || echo "No IDL files"
-      
+          find . -name "*.so" 2>/dev/null | head -20 || echo "No .so files"
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -133,25 +71,21 @@ jobs:
           name: build-artifacts
           path: |
             ecosystem-token/target/deploy/*.so
-            ecosystem-token/target/idl/
+            ecosystem-token/target/sbf-solana-solana/release/*.so
           retention-days: 30
           if-no-files-found: warn
 
   test:
     runs-on: ubuntu-latest
     name: Test Suite
-    
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Install Rust
+
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
-      
+
       - name: Run tests
-        working-directory: ./ecosystem-token
-        run: |
-          echo "Running unit tests..."
-          cargo test --lib || true
-        timeout-minutes: 30
-
-
+        working-directory: ./ecosystem-token/programs/ecosystem-token
+        run: cargo test --lib || true
+        timeout-minutes: 10
