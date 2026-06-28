@@ -125,6 +125,17 @@ pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -
         .ok_or(MathOverflow)?;
     // No supply cap - unlimited minting
 
+    // ── MINT TAX: 0.1% of tokens minted ──────────────────────────────
+    // Tax split: 70% to treasury (invested in RUSDY), 30% to yield pool (stakers)
+    let mint_tax = tokens_to_mint
+        .checked_mul(1)
+        .ok_or(MathOverflow)?
+        .checked_div(1000)
+        .ok_or(MathOverflow)?;
+    let tokens_after_tax = tokens_to_mint.checked_sub(mint_tax).ok_or(MathOverflow)?;
+    let treasury_cut = mint_tax.checked_mul(70).ok_or(MathOverflow)?.checked_div(100).ok_or(MathOverflow)?;
+    let yield_cut = mint_tax.checked_sub(treasury_cut).ok_or(MathOverflow)?;
+
     // Transfer USDC from user to vault
     let transfer_ctx = CpiContext::new(
         ctx.accounts.token_program.to_account_info(),
@@ -136,7 +147,7 @@ pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -
     );
     transfer(transfer_ctx, usdc_amount)?;
 
-    // Mint tokens to user
+    // Mint full amount first, then split tax tokens
     let seeds = &[b"vault".as_ref(), &[launchpad.bump]];
     let signer_seeds = &[&seeds[..]];
 
@@ -149,7 +160,36 @@ pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -
         },
         signer_seeds,
     );
-    mint_to(mint_ctx, tokens_to_mint)?;
+    mint_to(mint_ctx, tokens_after_tax)?;
+
+    // Mint tax → treasury (70%)
+    let mint_ctx = CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        MintTo {
+            mint: ctx.accounts.token_mint.to_account_info(),
+            to: ctx.accounts.treasury_token_ata.to_account_info(),
+            authority: ctx.accounts.vault_pda.to_account_info(),
+        },
+        signer_seeds,
+    );
+    mint_to(mint_ctx, treasury_cut)?;
+
+    // Mint tax → yield pool (30% for stakers)
+    let mint_ctx = CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        MintTo {
+            mint: ctx.accounts.token_mint.to_account_info(),
+            to: ctx.accounts.yield_vault_ata.to_account_info(),
+            authority: ctx.accounts.vault_pda.to_account_info(),
+        },
+        signer_seeds,
+    );
+    mint_to(mint_ctx, yield_cut)?;
+
+    msg!(
+        "Mint tax: {} tokens ({}% treasury, {}% yield pool)",
+        mint_tax, treasury_cut, yield_cut
+    );
 
     // Update user tier info
     let user_tier = &mut ctx.accounts.user_tier_info;
@@ -176,28 +216,64 @@ pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -
     Ok(())
 }
 
-pub fn redeem_tokens(ctx: Context<RedeemTokens>, token_amount: u64) -> Result<()> {
+/// Burn tokens and receive USDC back.
+/// A 0.1% BURN TAX is applied on the token amount being burned.
+/// Tax split: 70% to treasury (invested in RUSDY), 30% to yield pool (stakers).
+/// Tier 2 tokens cannot be burned directly — they must be unstaked first.
+pub fn burn_tokens(ctx: Context<BurnTokens>, token_amount: u64) -> Result<()> {
     require!(!ctx.accounts.launchpad_state.paused, LaunchpadPaused);
 
     let user_tier = &ctx.accounts.user_tier_info;
     require!(!user_tier.is_tier2, CannotRedeemTier2);
     require!(token_amount > 0, InvalidRedeemAmount);
 
-    // Transfer tokens to tax vault (burn simulation)
-    let transfer_ctx = CpiContext::new(
+    // ── BURN TAX: 0.1% of tokens being burned ─────────────────────────
+    // Tax split: 70% treasury → RUSDY investment, 30% yield pool → stakers
+    let burn_tax = token_amount
+        .checked_mul(1)
+        .ok_or(MathOverflow)?
+        .checked_div(1000)
+        .ok_or(MathOverflow)?;
+    let tokens_after_tax = token_amount.checked_sub(burn_tax).ok_or(MathOverflow)?;
+    let treasury_cut = burn_tax.checked_mul(70).ok_or(MathOverflow)?.checked_div(100).ok_or(MathOverflow)?;
+    let yield_cut = burn_tax.checked_sub(treasury_cut).ok_or(MathOverflow)?;
+
+    // Route burn tax to treasury (70%)
+    let tax_transfer_ctx = CpiContext::new(
         ctx.accounts.token_program.to_account_info(),
         Transfer {
             from: ctx.accounts.user_token_ata.to_account_info(),
-            to: ctx.accounts.tax_vault.to_account_info(),
+            to: ctx.accounts.treasury_token_ata.to_account_info(),
             authority: ctx.accounts.user.to_account_info(),
         },
     );
-    transfer(transfer_ctx, token_amount)?;
+    transfer(tax_transfer_ctx, treasury_cut)?;
 
-    // Calculate USDC redemption (1 token = 1 USDC for Tier 1)
-    let usdc_amount = token_amount.checked_div(1_000_000).ok_or(MathOverflow)?;
+    // Route burn tax to yield pool (30%)
+    let yield_transfer_ctx = CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.user_token_ata.to_account_info(),
+            to: ctx.accounts.yield_vault_ata.to_account_info(),
+            authority: ctx.accounts.user.to_account_info(),
+        },
+    );
+    transfer(yield_transfer_ctx, yield_cut)?;
 
-    // Transfer USDC from vault to user
+    // Burn the remaining tokens (destroy them)
+    use anchor_spl::token::Burn;
+    let burn_ctx = CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        Burn {
+            mint: ctx.accounts.token_mint.to_account_info(),
+            from: ctx.accounts.user_token_ata.to_account_info(),
+            authority: ctx.accounts.user.to_account_info(),
+        },
+    );
+    anchor_spl::token::burn(burn_ctx, tokens_after_tax)?;
+
+    // Return USDC to user (1 token = 1/1_000_000 USDC, as tokens have 6 decimals)
+    let usdc_amount = tokens_after_tax.checked_div(1_000_000).ok_or(MathOverflow)?;
     let seeds = &[b"vault".as_ref(), &[ctx.accounts.launchpad_state.bump]];
     let signer_seeds = &[&seeds[..]];
 
@@ -212,80 +288,10 @@ pub fn redeem_tokens(ctx: Context<RedeemTokens>, token_amount: u64) -> Result<()
     );
     transfer(transfer_ctx, usdc_amount)?;
 
-    Ok(())
-}
-
-// ============================================================================
-// TRANSFER WITH TAX
-// ============================================================================
-
-pub fn transfer_with_tax(ctx: Context<TransferWithTax>, amount: u64) -> Result<()> {
-    require!(amount > 0, InsufficientTokens);
-
-    let user_tier = &ctx.accounts.user_tier_info;
-
-    // Check vesting lock for Tier 2
-    if user_tier.is_tier2 {
-        let now = Clock::get()?.unix_timestamp;
-        let vesting_start = user_tier.vesting_start;
-        let vesting_duration: i64 = 365 * 24 * 3600;
-        let elapsed = (now - vesting_start).max(0);
-        let vested = user_tier.tokens_purchased
-            .checked_mul(elapsed as u64)
-            .unwrap_or(0)
-            .checked_div(vesting_duration as u64)
-            .unwrap_or(0);
-        require!(vested >= amount, CannotTransferLocked);
-    }
-
-    // Calculate 0.1% tax
-    let tax = amount
-        .checked_mul(1)
-        .ok_or(MathOverflow)?
-        .checked_div(1000)
-        .ok_or(MathOverflow)?;
-    let net_amount = amount.checked_sub(tax).ok_or(MathOverflow)?;
-
-    // Split tax: 70% to treasury, 30% to yield vault
-    let treasury_tax = tax
-        .checked_mul(70)
-        .ok_or(MathOverflow)?
-        .checked_div(100)
-        .ok_or(MathOverflow)?;
-    let yield_tax = tax.checked_sub(treasury_tax).ok_or(MathOverflow)?;
-
-    // Transfer net amount to recipient
-    let transfer_ctx = CpiContext::new(
-        ctx.accounts.token_program.to_account_info(),
-        Transfer {
-            from: ctx.accounts.from.to_account_info(),
-            to: ctx.accounts.to.to_account_info(),
-            authority: ctx.accounts.user.to_account_info(),
-        },
+    msg!(
+        "Burn tax: {} tokens ({}% treasury, {}% yield pool). {} tokens burned, {} USDC returned.",
+        burn_tax, treasury_cut, yield_cut, tokens_after_tax, usdc_amount
     );
-    transfer(transfer_ctx, net_amount)?;
-
-    // Transfer treasury tax
-    let transfer_ctx = CpiContext::new(
-        ctx.accounts.token_program.to_account_info(),
-        Transfer {
-            from: ctx.accounts.from.to_account_info(),
-            to: ctx.accounts.treasury_vault_ata.to_account_info(),
-            authority: ctx.accounts.user.to_account_info(),
-        },
-    );
-    transfer(transfer_ctx, treasury_tax)?;
-
-    // Transfer yield tax
-    let transfer_ctx = CpiContext::new(
-        ctx.accounts.token_program.to_account_info(),
-        Transfer {
-            from: ctx.accounts.from.to_account_info(),
-            to: ctx.accounts.yield_vault_ata.to_account_info(),
-            authority: ctx.accounts.user.to_account_info(),
-        },
-    );
-    transfer(transfer_ctx, yield_tax)?;
 
     Ok(())
 }
@@ -799,7 +805,15 @@ pub struct MintTokens<'info> {
     #[account(mut)]
     pub vault: Account<'info, TokenAccount>,
 
-    /// CHECK: Vault PDA
+    /// Treasury token account receives 70% of mint tax
+    #[account(mut)]
+    pub treasury_token_ata: Account<'info, TokenAccount>,
+
+    /// Yield pool receives 30% of mint tax for stakers
+    #[account(mut)]
+    pub yield_vault_ata: Account<'info, TokenAccount>,
+
+    /// CHECK: Vault PDA authority
     pub vault_pda: UncheckedAccount<'info>,
 
     #[account(
@@ -816,7 +830,7 @@ pub struct MintTokens<'info> {
 }
 
 #[derive(Accounts)]
-pub struct RedeemTokens<'info> {
+pub struct BurnTokens<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
@@ -824,42 +838,27 @@ pub struct RedeemTokens<'info> {
     pub launchpad_state: Account<'info, LaunchpadState>,
 
     #[account(mut)]
+    pub token_mint: Account<'info, Mint>,
+
+    #[account(mut)]
     pub user_token_ata: Account<'info, TokenAccount>,
 
     #[account(mut)]
     pub user_usdc_ata: Account<'info, TokenAccount>,
 
+    /// Treasury token account receives 70% of burn tax
+    #[account(mut)]
+    pub treasury_token_ata: Account<'info, TokenAccount>,
+
+    /// Yield pool receives 30% of burn tax for stakers
+    #[account(mut)]
+    pub yield_vault_ata: Account<'info, TokenAccount>,
+
     #[account(mut)]
     pub vault: Account<'info, TokenAccount>,
 
-    #[account(mut)]
-    pub tax_vault: Account<'info, TokenAccount>,
-
-    /// CHECK: Vault PDA
+    /// CHECK: Vault PDA authority
     pub vault_pda: UncheckedAccount<'info>,
-
-    #[account(seeds = [b"user-tier", user.key().as_ref()], bump = user_tier_info.bump)]
-    pub user_tier_info: Account<'info, UserTierInfo>,
-
-    pub token_program: Program<'info, Token>,
-}
-
-#[derive(Accounts)]
-pub struct TransferWithTax<'info> {
-    #[account(mut)]
-    pub user: Signer<'info>,
-
-    #[account(mut)]
-    pub from: Account<'info, TokenAccount>,
-
-    #[account(mut)]
-    pub to: Account<'info, TokenAccount>,
-
-    #[account(mut)]
-    pub treasury_vault_ata: Account<'info, TokenAccount>,
-
-    #[account(mut)]
-    pub yield_vault_ata: Account<'info, TokenAccount>,
 
     #[account(seeds = [b"user-tier", user.key().as_ref()], bump = user_tier_info.bump)]
     pub user_tier_info: Account<'info, UserTierInfo>,

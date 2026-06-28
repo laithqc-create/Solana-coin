@@ -45,17 +45,15 @@ pub mod ecosystem_token {
         instructions::mint_tokens(ctx, usdc_amount, is_tier2)
     }
 
-    pub fn redeem_tokens(ctx: Context<RedeemTokens>, token_amount: u64) -> Result<()> {
-        instructions::redeem_tokens(ctx, token_amount)
+    pub fn burn_tokens(ctx: Context<BurnTokens>, token_amount: u64) -> Result<()> {
+        instructions::burn_tokens(ctx, token_amount)
     }
 
     // ============================================================================
     // TRANSFER WITH TAX
     // ============================================================================
 
-    pub fn transfer_with_tax(ctx: Context<TransferWithTax>, amount: u64) -> Result<()> {
-        instructions::transfer_with_tax(ctx, amount)
-    }
+
 
     // ============================================================================
     // STAKING & YIELD
