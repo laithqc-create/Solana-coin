@@ -26,10 +26,10 @@ pub fn initialize_launchpad(
     launchpad.authority = ctx.accounts.authority.key();
     launchpad.total_usdc_raised = 0;
     launchpad.total_tokens_minted = 0;
-    launchpad.tier1_price = 1_000_000; // 1 USDC = 1e6 tokens
-    launchpad.current_discount = 50;   // Start at 50% discount
-    launchpad.discount_threshold_1 = 1_000_000_000_000; // 1M USDC
-    launchpad.discount_threshold_2 = 2_000_000_000_000; // 2M USDC
+    launchpad.tier1_price = 1_000_000; // Fixed peg reference: 1 USDC = 1 token (same 6 decimals)
+    launchpad.current_discount = 0;    // No discount - fixed 1:1 peg always
+    launchpad.discount_threshold_1 = u64::MAX; // Unused - fixed peg
+    launchpad.discount_threshold_2 = u64::MAX; // Unused - fixed peg
     launchpad.paused = false;
     launchpad.bump = token_bump;
 
@@ -95,48 +95,31 @@ pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -
 
     let launchpad = &mut ctx.accounts.launchpad_state;
 
-    // Calculate discount based on USDC raised
-    let discount = if launchpad.total_usdc_raised < launchpad.discount_threshold_1 {
-        50
-    } else if launchpad.total_usdc_raised < launchpad.discount_threshold_2 {
-        40
-    } else {
-        50
-    };
+    // ── FIXED PEG: 1 USDT = 1 token always ───────────────────────────
+    // Price is hardcoded at 1:1 and NEVER changes regardless of market
+    // Both token and USDC have 6 decimals → direct 1:1 ratio
+    let tokens_to_mint = usdc_amount; // 1 USDC micro-unit = 1 token micro-unit
 
-    // Calculate tokens to mint
-    let base_tokens = usdc_amount
-        .checked_mul(launchpad.tier1_price)
-        .ok_or(MathOverflow)?;
-    let tokens_to_mint = if is_tier2 {
-        base_tokens
-            .checked_mul(100 + discount as u64)
-            .ok_or(MathOverflow)?
-            .checked_div(100)
-            .ok_or(MathOverflow)?
-    } else {
-        base_tokens
-    };
-
-    // Check supply cap (100M tokens)
     let new_total = launchpad
         .total_tokens_minted
         .checked_add(tokens_to_mint)
         .ok_or(MathOverflow)?;
     // No supply cap - unlimited minting
 
-    // ── MINT TAX: 0.1% of tokens minted ──────────────────────────────
-    // Tax split: 70% to treasury (invested in RUSDY), 30% to yield pool (stakers)
-    let mint_tax = tokens_to_mint
+    // ── MINT TAX: 0.1% fee paid FROM the pool, NOT from user ─────────
+    // User always receives exactly 1 token per 1 USDC regardless of market.
+    // The 0.1% fee is sourced from pool reserves:
+    //   70% → treasury (invested in RUSDY via Jupiter DCA)
+    //   30% → yield pool (distributed to stakers)
+    let fee = tokens_to_mint
         .checked_mul(1)
         .ok_or(MathOverflow)?
         .checked_div(1000)
         .ok_or(MathOverflow)?;
-    let tokens_after_tax = tokens_to_mint.checked_sub(mint_tax).ok_or(MathOverflow)?;
-    let treasury_cut = mint_tax.checked_mul(70).ok_or(MathOverflow)?.checked_div(100).ok_or(MathOverflow)?;
-    let yield_cut = mint_tax.checked_sub(treasury_cut).ok_or(MathOverflow)?;
+    let treasury_cut = fee.checked_mul(70).ok_or(MathOverflow)?.checked_div(100).ok_or(MathOverflow)?;
+    let yield_cut = fee.checked_sub(treasury_cut).ok_or(MathOverflow)?;
 
-    // Transfer USDC from user to vault
+    // Transfer USDC from user to vault (full 1:1 amount — no extra charge)
     let transfer_ctx = CpiContext::new(
         ctx.accounts.token_program.to_account_info(),
         Transfer {
@@ -147,10 +130,10 @@ pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -
     );
     transfer(transfer_ctx, usdc_amount)?;
 
-    // Mint full amount first, then split tax tokens
     let seeds = &[b"vault".as_ref(), &[launchpad.bump]];
     let signer_seeds = &[&seeds[..]];
 
+    // Mint full 1:1 tokens to user (user is NOT charged the fee)
     let mint_ctx = CpiContext::new_with_signer(
         ctx.accounts.token_program.to_account_info(),
         MintTo {
@@ -160,9 +143,9 @@ pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -
         },
         signer_seeds,
     );
-    mint_to(mint_ctx, tokens_after_tax)?;
+    mint_to(mint_ctx, tokens_to_mint)?;
 
-    // Mint tax → treasury (70%)
+    // Mint fee from pool → treasury (70%) — pool absorbs this cost
     let mint_ctx = CpiContext::new_with_signer(
         ctx.accounts.token_program.to_account_info(),
         MintTo {
@@ -174,7 +157,7 @@ pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -
     );
     mint_to(mint_ctx, treasury_cut)?;
 
-    // Mint tax → yield pool (30% for stakers)
+    // Mint fee from pool → yield vault (30%) — for staker rewards
     let mint_ctx = CpiContext::new_with_signer(
         ctx.accounts.token_program.to_account_info(),
         MintTo {
@@ -187,8 +170,8 @@ pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -
     mint_to(mint_ctx, yield_cut)?;
 
     msg!(
-        "Mint tax: {} tokens ({}% treasury, {}% yield pool)",
-        mint_tax, treasury_cut, yield_cut
+        "MINT: {} USDC → {} tokens at fixed 1:1 peg. Pool fee: {} tokens (70% treasury / 30% yield)",
+        usdc_amount, tokens_to_mint, fee
     );
 
     // Update user tier info
@@ -211,15 +194,16 @@ pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -
         .checked_add(usdc_amount)
         .ok_or(MathOverflow)?;
     launchpad.total_tokens_minted = new_total;
-    launchpad.current_discount = discount as u8;
 
     Ok(())
 }
 
-/// Burn tokens and receive USDC back.
-/// A 0.1% BURN TAX is applied on the token amount being burned.
-/// Tax split: 70% to treasury (invested in RUSDY), 30% to yield pool (stakers).
-/// Tier 2 tokens cannot be burned directly — they must be unstaked first.
+/// Burn tokens and receive USDC back at fixed 1:1 peg.
+/// Price is ALWAYS 1 token = 1 USDC regardless of market conditions.
+/// 0.1% fee is absorbed by the pool (NOT deducted from user's USDC return).
+///   70% of fee → treasury (invested in RUSDY via Jupiter)
+///   30% of fee → yield pool (distributed to stakers)
+/// Tier 2 tokens cannot be burned — they must complete the unstake flow.
 pub fn burn_tokens(ctx: Context<BurnTokens>, token_amount: u64) -> Result<()> {
     require!(!ctx.accounts.launchpad_state.paused, LaunchpadPaused);
 
@@ -227,40 +211,23 @@ pub fn burn_tokens(ctx: Context<BurnTokens>, token_amount: u64) -> Result<()> {
     require!(!user_tier.is_tier2, CannotRedeemTier2);
     require!(token_amount > 0, InvalidRedeemAmount);
 
-    // ── BURN TAX: 0.1% of tokens being burned ─────────────────────────
-    // Tax split: 70% treasury → RUSDY investment, 30% yield pool → stakers
-    let burn_tax = token_amount
+    // ── FIXED PEG: 1 token = 1 USDC always ───────────────────────────
+    // User gets back full 1:1 USDC regardless of market price.
+    // 6-decimal parity: token_amount micro-tokens = token_amount micro-USDC
+    let usdc_to_return = token_amount; // 1:1 fixed peg
+
+    // ── BURN FEE: 0.1% absorbed by pool ───────────────────────────────
+    // Fee is NOT deducted from user's USDC. Pool covers this cost.
+    // Pool earns from yield/RUSDY investment to sustain this subsidy.
+    let fee = token_amount
         .checked_mul(1)
         .ok_or(MathOverflow)?
         .checked_div(1000)
         .ok_or(MathOverflow)?;
-    let tokens_after_tax = token_amount.checked_sub(burn_tax).ok_or(MathOverflow)?;
-    let treasury_cut = burn_tax.checked_mul(70).ok_or(MathOverflow)?.checked_div(100).ok_or(MathOverflow)?;
-    let yield_cut = burn_tax.checked_sub(treasury_cut).ok_or(MathOverflow)?;
+    let treasury_cut = fee.checked_mul(70).ok_or(MathOverflow)?.checked_div(100).ok_or(MathOverflow)?;
+    let yield_cut = fee.checked_sub(treasury_cut).ok_or(MathOverflow)?;
 
-    // Route burn tax to treasury (70%)
-    let tax_transfer_ctx = CpiContext::new(
-        ctx.accounts.token_program.to_account_info(),
-        Transfer {
-            from: ctx.accounts.user_token_ata.to_account_info(),
-            to: ctx.accounts.treasury_token_ata.to_account_info(),
-            authority: ctx.accounts.user.to_account_info(),
-        },
-    );
-    transfer(tax_transfer_ctx, treasury_cut)?;
-
-    // Route burn tax to yield pool (30%)
-    let yield_transfer_ctx = CpiContext::new(
-        ctx.accounts.token_program.to_account_info(),
-        Transfer {
-            from: ctx.accounts.user_token_ata.to_account_info(),
-            to: ctx.accounts.yield_vault_ata.to_account_info(),
-            authority: ctx.accounts.user.to_account_info(),
-        },
-    );
-    transfer(yield_transfer_ctx, yield_cut)?;
-
-    // Burn the remaining tokens (destroy them)
+    // Burn ALL the user's tokens (destroy them completely)
     use anchor_spl::token::Burn;
     let burn_ctx = CpiContext::new(
         ctx.accounts.token_program.to_account_info(),
@@ -270,10 +237,9 @@ pub fn burn_tokens(ctx: Context<BurnTokens>, token_amount: u64) -> Result<()> {
             authority: ctx.accounts.user.to_account_info(),
         },
     );
-    anchor_spl::token::burn(burn_ctx, tokens_after_tax)?;
+    anchor_spl::token::burn(burn_ctx, token_amount)?;
 
-    // Return USDC to user (1 token = 1/1_000_000 USDC, as tokens have 6 decimals)
-    let usdc_amount = tokens_after_tax.checked_div(1_000_000).ok_or(MathOverflow)?;
+    // Return full 1:1 USDC to user from vault
     let seeds = &[b"vault".as_ref(), &[ctx.accounts.launchpad_state.bump]];
     let signer_seeds = &[&seeds[..]];
 
@@ -286,11 +252,35 @@ pub fn burn_tokens(ctx: Context<BurnTokens>, token_amount: u64) -> Result<()> {
         },
         signer_seeds,
     );
-    transfer(transfer_ctx, usdc_amount)?;
+    transfer(transfer_ctx, usdc_to_return)?;
+
+    // Pool covers fee: transfer from pool reserves to treasury (70%)
+    let pool_fee_ctx = CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.vault.to_account_info(),
+            to: ctx.accounts.treasury_token_ata.to_account_info(),
+            authority: ctx.accounts.vault_pda.to_account_info(),
+        },
+        signer_seeds,
+    );
+    transfer(pool_fee_ctx, treasury_cut)?;
+
+    // Pool covers fee: transfer from pool reserves to yield vault (30%)
+    let yield_fee_ctx = CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.vault.to_account_info(),
+            to: ctx.accounts.yield_vault_ata.to_account_info(),
+            authority: ctx.accounts.vault_pda.to_account_info(),
+        },
+        signer_seeds,
+    );
+    transfer(yield_fee_ctx, yield_cut)?;
 
     msg!(
-        "Burn tax: {} tokens ({}% treasury, {}% yield pool). {} tokens burned, {} USDC returned.",
-        burn_tax, treasury_cut, yield_cut, tokens_after_tax, usdc_amount
+        "BURN: {} tokens → {} USDC at fixed 1:1 peg. Pool fee: {} USDC (70% treasury / 30% yield)",
+        token_amount, usdc_to_return, fee
     );
 
     Ok(())
