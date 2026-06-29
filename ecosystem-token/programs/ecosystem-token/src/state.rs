@@ -200,3 +200,63 @@ pub struct VestingSchedule {
     pub claimed_amount: u64,
     pub bump: u8,
 }
+
+// ============================================================================
+// YIELD STRATEGY STATE (sUSDS + sUSDe)
+// ============================================================================
+
+/// Tracks the USDC → USDS → sUSDS position (Sky Protocol)
+#[account]
+pub struct SkyPosition {
+    pub authority: Pubkey,
+    /// Total USDC allocated to this strategy
+    pub usdc_deposited: u64,
+    /// Current sUSDS balance (reported by keeper)
+    pub susds_balance: u64,
+    /// Total yield earned in USDC equivalent
+    pub total_yield_earned: u64,
+    /// Current APY in basis points (updated by keeper)
+    pub current_apy_bps: u64,
+    /// Timestamp of last keeper report
+    pub last_update_ts: i64,
+    /// Current status of position
+    pub status: crate::yield_strategy::StrategyStatus,
+    pub bump: u8,
+}
+
+/// Tracks the USDT → USDe → sUSDe position (Ethena via Meteora)
+#[account]
+pub struct EthenaPosition {
+    pub authority: Pubkey,
+    /// Total USDT allocated to this strategy
+    pub usdt_deposited: u64,
+    /// Current sUSDe balance (reported by keeper)
+    pub susde_balance: u64,
+    /// Total yield earned in USDT equivalent
+    pub total_yield_earned: u64,
+    /// Current APY in basis points (updated by keeper, variable)
+    pub current_apy_bps: u64,
+    /// Timestamp of last keeper report
+    pub last_update_ts: i64,
+    /// Current status of position
+    pub status: crate::yield_strategy::StrategyStatus,
+    pub bump: u8,
+}
+
+/// Combined pool state — tracks both USDC and USDT pools
+#[account]
+pub struct PoolState {
+    pub authority: Pubkey,
+    // USDC pool
+    pub total_usdc: u64,
+    pub liquid_usdc: u64,       // 20% kept liquid
+    pub invested_usdc: u64,     // 80% in sUSDS
+    // USDT pool
+    pub total_usdt: u64,
+    pub liquid_usdt: u64,       // 20% kept liquid
+    pub invested_usdt: u64,     // 80% in sUSDe
+    // Combined yield
+    pub total_yield_distributed: u64,
+    pub last_update_ts: i64,
+    pub bump: u8,
+}

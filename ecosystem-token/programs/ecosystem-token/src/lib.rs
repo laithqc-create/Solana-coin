@@ -6,12 +6,15 @@ mod morpho;
 mod rwa;
 mod errors;
 mod instructions;
+mod investment_instructions;
 mod state;
+mod yield_strategy;
 
 pub use anchor_lang::error::ErrorCode;
 pub use errors::EcosystemError;
 
 use instructions::*;
+use investment_instructions::*;
 
 #[program]
 pub mod ecosystem_token {
@@ -28,7 +31,9 @@ pub mod ecosystem_token {
         asset_manager_address: Pubkey,
         protocol_address: Pubkey,
     ) -> Result<()> {
-        instructions::initialize_treasury(ctx, marketing_address, asset_manager_address, protocol_address)
+        instructions::initialize_treasury(
+            ctx, marketing_address, asset_manager_address, protocol_address,
+        )
     }
 
     // ── Token operations ───────────────────────────────────────────────────
@@ -45,7 +50,7 @@ pub mod ecosystem_token {
         instructions::claim_yield(ctx)
     }
 
-    // ── Unstaking flow ─────────────────────────────────────────────────────
+    // ── Unstaking ─────────────────────────────────────────────────────────
     pub fn request_unstake(ctx: Context<RequestUnstake>, amount: u64) -> Result<()> {
         instructions::request_unstake(ctx, amount)
     }
@@ -58,26 +63,64 @@ pub mod ecosystem_token {
         instructions::emergency_redeem_defi(ctx)
     }
 
-    // ── Morpho investment ──────────────────────────────────────────────────
-    pub fn propose_morpho_pool(
-        ctx: Context<ProposeMorphoPool>,
-        pool_name: [u8; 64],
-        pool_type: state::MorphoPoolType,
-        apy_bps: u64,
+    // ── Strategy 1: USDC → sUSDS (Sky Protocol) ───────────────────────────
+    pub fn initialize_sky_position(ctx: Context<InitializeSkyPosition>) -> Result<()> {
+        investment_instructions::initialize_sky_position(ctx)
+    }
+
+    pub fn invest_usdc_to_susds(ctx: Context<InvestUsdcToSusds>) -> Result<()> {
+        investment_instructions::invest_usdc_to_susds(ctx)
+    }
+
+    pub fn confirm_sky_investment(
+        ctx: Context<KeeperReportSky>,
+        susds_balance: u64,
+        report_ts: i64,
     ) -> Result<()> {
-        instructions::propose_morpho_pool(ctx, pool_name, pool_type, apy_bps)
+        investment_instructions::confirm_sky_investment(ctx, susds_balance, report_ts)
     }
 
-    pub fn approve_morpho_pool(ctx: Context<ApproveMorphoPool>) -> Result<()> {
-        instructions::approve_morpho_pool(ctx)
+    pub fn report_sky_yield(
+        ctx: Context<KeeperReportSky>,
+        new_susds_balance: u64,
+        new_apy_bps: u64,
+        report_ts: i64,
+    ) -> Result<()> {
+        investment_instructions::report_sky_yield(ctx, new_susds_balance, new_apy_bps, report_ts)
     }
 
-    pub fn invest_in_morpho(ctx: Context<InvestInMorpho>, amount: u64) -> Result<()> {
-        instructions::invest_in_morpho(ctx, amount)
+    pub fn withdraw_from_susds(ctx: Context<KeeperReportSky>) -> Result<()> {
+        investment_instructions::withdraw_from_susds(ctx)
     }
 
-    pub fn report_morpho_yield(ctx: Context<ReportMorphoYield>, yield_amount: u64) -> Result<()> {
-        instructions::report_morpho_yield(ctx, yield_amount)
+    // ── Strategy 2: USDT → sUSDe (Ethena via Meteora) ─────────────────────
+    pub fn initialize_ethena_position(ctx: Context<InitializeEthenaPosition>) -> Result<()> {
+        investment_instructions::initialize_ethena_position(ctx)
+    }
+
+    pub fn invest_usdt_to_susde(ctx: Context<InvestUsdtToSusde>) -> Result<()> {
+        investment_instructions::invest_usdt_to_susde(ctx)
+    }
+
+    pub fn confirm_ethena_investment(
+        ctx: Context<KeeperReportEthena>,
+        susde_balance: u64,
+        report_ts: i64,
+    ) -> Result<()> {
+        investment_instructions::confirm_ethena_investment(ctx, susde_balance, report_ts)
+    }
+
+    pub fn report_ethena_yield(
+        ctx: Context<KeeperReportEthena>,
+        new_susde_balance: u64,
+        new_apy_bps: u64,
+        report_ts: i64,
+    ) -> Result<()> {
+        investment_instructions::report_ethena_yield(ctx, new_susde_balance, new_apy_bps, report_ts)
+    }
+
+    pub fn withdraw_from_susde(ctx: Context<KeeperReportEthena>) -> Result<()> {
+        investment_instructions::withdraw_from_susde(ctx)
     }
 
     // ── Admin ──────────────────────────────────────────────────────────────
@@ -90,7 +133,8 @@ pub mod ecosystem_token {
         investment_ratio_bps: u64,
     ) -> Result<()> {
         instructions::update_revenue_split(
-            ctx, holder_bps, marketing_bps, asset_manager_bps, protocol_bps, investment_ratio_bps,
+            ctx, holder_bps, marketing_bps,
+            asset_manager_bps, protocol_bps, investment_ratio_bps,
         )
     }
 
