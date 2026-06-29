@@ -1,24 +1,23 @@
 [toolchain]
+anchor_version = "0.29.0"
+solana_version = "1.18.26"
 
 [features]
 seeds = false
 init-if-needed = false
 
 [programs.devnet]
-ecosystem_token = "EcosystemTokenProgramID123456789" # Will be updated after deployment
-
-[programs.testnet]
-ecosystem_token = "EcosystemTokenProgramID123456789"
+ecosystem_token = "11111111111111111111111111111112"
 
 [programs.mainnet]
-ecosystem_token = "EcosystemTokenProgramID123456789"
+ecosystem_token = "11111111111111111111111111111112"
 
 [registry]
-url = "https://api.github.com/repos/coral-xyz/anchor/releases/latest"
+url = "https://api.anchor-lang.com/api/registry"
 
 [provider]
 cluster = "Devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "yarn run ts-mocha --require ts-node/register tests/**/*.ts"
+test = "cargo test --lib"

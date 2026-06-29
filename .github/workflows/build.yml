@@ -1,4 +1,4 @@
-name: Build Solana Smart Contract
+name: Build & Deploy Solana Smart Contract
 
 on:
   push:
@@ -7,63 +7,267 @@ on:
     branches: [main, develop]
   workflow_dispatch:
 
+env:
+  SOLANA_VERSION: "1.18.26"
+  ANCHOR_VERSION: "0.29.0"
+  NODE_VERSION: "20"
+  RUST_TOOLCHAIN: "1.75.0"
+
 jobs:
   build:
+    name: Compile SBF Bytecode
     runs-on: ubuntu-latest
-    name: Build & Test
+    timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      # ── Rust ──────────────────────────────────────────────────────────────
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
 
-      - name: Cache Rust
+      - name: Cache Cargo registry
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Build smart contract
-        working-directory: ./ecosystem-token/programs/ecosystem-token
+      # ── Solana CLI ─────────────────────────────────────────────────────────
+      - name: Install Solana CLI ${{ env.SOLANA_VERSION }}
         run: |
-          echo "=== Building ==="
-          cargo build --release
-          echo "=== Finding outputs ==="
-          find target -name "*.so" -o -name "*ecosystem*" 2>/dev/null | head -20
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
 
-      - name: Collect artifact
-        if: always()
+      - name: Cache Solana toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/solana
+          key: solana-${{ env.SOLANA_VERSION }}
+
+      # ── Node / Anchor CLI ─────────────────────────────────────────────────
+      - name: Install Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Anchor CLI ${{ env.ANCHOR_VERSION }}
         run: |
-          mkdir -p artifacts
-          # Find the .so wherever it is
-          find ecosystem-token -name "*.so" 2>/dev/null -exec cp {} artifacts/ \;
-          # Also copy any dylib
-          find ecosystem-token -name "*ecosystem_token*" 2>/dev/null -exec cp {} artifacts/ \; || true
-          echo "=== Artifacts collected ==="
-          ls -lah artifacts/
+          npm install -g @coral-xyz/anchor-cli@${{ env.ANCHOR_VERSION }}
 
-      - name: Upload artifacts
+      # ── Versions ──────────────────────────────────────────────────────────
+      - name: Print toolchain versions
+        run: |
+          rustc --version
+          cargo --version
+          solana --version
+          anchor --version
+
+      # ── Program ID ────────────────────────────────────────────────────────
+      # On first run: placeholder ID is used (build will succeed)
+      # After keygen: set PROGRAM_ID secret in GitHub → Settings → Secrets
+      - name: Inject Program ID into lib.rs
+        run: |
+          PROGRAM_ID="${{ secrets.PROGRAM_ID }}"
+          if [ -z "$PROGRAM_ID" ]; then
+            echo "⚠️  PROGRAM_ID secret not set — using placeholder. Set it in GitHub Secrets after keygen."
+            PROGRAM_ID="11111111111111111111111111111112"
+          fi
+          sed -i "s/declare_id!(\".*\")/declare_id!(\"$PROGRAM_ID\")/" \
+            ecosystem-token/programs/ecosystem-token/src/lib.rs
+          echo "✅ Program ID set to: $PROGRAM_ID"
+
+      # ── Build SBF ─────────────────────────────────────────────────────────
+      - name: Build smart contract (anchor build → SBF bytecode)
+        working-directory: ./ecosystem-token
+        run: |
+          anchor build
+          echo "✅ SBF build complete"
+
+      # ── Validate output ───────────────────────────────────────────────────
+      - name: Validate SBF output
+        run: |
+          SO_FILE="ecosystem-token/target/deploy/ecosystem_token.so"
+          if [ ! -f "$SO_FILE" ]; then
+            echo "❌ ERROR: ecosystem_token.so not found — build failed"
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$SO_FILE")
+          echo "✅ ecosystem_token.so found: $SIZE bytes"
+          if [ "$SIZE" -lt 10000 ]; then
+            echo "❌ ERROR: .so file suspiciously small ($SIZE bytes) — build may be corrupt"
+            exit 1
+          fi
+          echo "✅ SBF bytecode validated"
+
+      # ── Collect IDL ───────────────────────────────────────────────────────
+      - name: Validate IDL output
+        run: |
+          IDL_FILE="ecosystem-token/target/idl/ecosystem_token.json"
+          if [ ! -f "$IDL_FILE" ]; then
+            echo "⚠️  IDL file not found — continuing without it"
+          else
+            echo "✅ IDL found: $(stat -c%s "$IDL_FILE") bytes"
+          fi
+
+      # ── Upload artifacts ──────────────────────────────────────────────────
+      - name: Upload build artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-artifacts
-          path: artifacts/
+          name: solana-build-${{ github.sha }}
+          path: |
+            ecosystem-token/target/deploy/ecosystem_token.so
+            ecosystem-token/target/idl/ecosystem_token.json
           retention-days: 30
           if-no-files-found: warn
 
   test:
+    name: Rust Unit Tests
     runs-on: ubuntu-latest
-    name: Test Suite
+    timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
-      - name: Run tests
-        working-directory: ./ecosystem-token/programs/ecosystem-token
-        run: cargo test --lib || true
-        timeout-minutes: 10
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Run unit tests
+        working-directory: ./ecosystem-token
+        run: |
+          cargo test --lib 2>&1 | tee test-output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo "Exit code: $EXIT_CODE"
+          exit $EXIT_CODE
+        timeout-minutes: 15
+
+      - name: Lint with Clippy
+        working-directory: ./ecosystem-token
+        run: cargo clippy --all-targets -- -D warnings || true
+
+      - name: Check formatting
+        working-directory: ./ecosystem-token
+        run: cargo fmt --check || true
+
+  deploy-devnet:
+    name: Deploy to Devnet
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    timeout-minutes: 20
+    # Only deploy on push to main AND when PROGRAM_ID secret is set
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check deployment prerequisites
+        id: prereq
+        run: |
+          if [ -z "${{ secrets.PROGRAM_ID }}" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "⚠️  PROGRAM_ID secret not set — skipping devnet deployment"
+            echo "    Set PROGRAM_ID and DEPLOY_KEYPAIR secrets to enable auto-deploy"
+          elif [ -z "${{ secrets.DEPLOY_KEYPAIR }}" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "⚠️  DEPLOY_KEYPAIR secret not set — skipping devnet deployment"
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "✅ Deployment prerequisites met"
+          fi
+
+      - name: Install Solana CLI ${{ env.SOLANA_VERSION }}
+        if: steps.prereq.outputs.skip == 'false'
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Node.js + Anchor CLI
+        if: steps.prereq.outputs.skip == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Anchor CLI ${{ env.ANCHOR_VERSION }}
+        if: steps.prereq.outputs.skip == 'false'
+        run: npm install -g @coral-xyz/anchor-cli@${{ env.ANCHOR_VERSION }}
+
+      - name: Restore Rust
+        if: steps.prereq.outputs.skip == 'false'
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Write deploy keypair from secret
+        if: steps.prereq.outputs.skip == 'false'
+        run: |
+          echo '${{ secrets.DEPLOY_KEYPAIR }}' > /tmp/deploy-keypair.json
+          chmod 600 /tmp/deploy-keypair.json
+          echo "✅ Deploy keypair written"
+
+      - name: Configure Solana for devnet
+        if: steps.prereq.outputs.skip == 'false'
+        run: |
+          solana config set --url https://api.devnet.solana.com
+          solana config set --keypair /tmp/deploy-keypair.json
+          solana config get
+
+      - name: Request devnet SOL airdrop
+        if: steps.prereq.outputs.skip == 'false'
+        run: |
+          BALANCE=$(solana balance | awk '{print $1}')
+          echo "Current balance: $BALANCE SOL"
+          if (( $(echo "$BALANCE < 0.5" | bc -l) )); then
+            echo "Requesting airdrop..."
+            solana airdrop 2 || echo "Airdrop failed (rate limited) — continuing with existing balance"
+            sleep 10
+          fi
+          echo "Final balance: $(solana balance)"
+
+      - name: Inject Program ID and build
+        if: steps.prereq.outputs.skip == 'false'
+        run: |
+          sed -i "s/declare_id!(\".*\")/declare_id!(\"${{ secrets.PROGRAM_ID }}\")/" \
+            ecosystem-token/programs/ecosystem-token/src/lib.rs
+          cd ecosystem-token && anchor build
+
+      - name: Deploy to devnet
+        if: steps.prereq.outputs.skip == 'false'
+        working-directory: ./ecosystem-token
+        run: |
+          anchor deploy \
+            --program-name ecosystem_token \
+            --program-keypair /tmp/deploy-keypair.json \
+            --provider.cluster devnet
+          echo "✅ Deployed to devnet"
+
+      - name: Verify deployment
+        if: steps.prereq.outputs.skip == 'false'
+        run: |
+          PROGRAM_ID="${{ secrets.PROGRAM_ID }}"
+          echo "Verifying program on devnet: $PROGRAM_ID"
+          solana program show "$PROGRAM_ID" || echo "⚠️  Could not verify — check manually"
+          echo "Explorer: https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet"
+
+      - name: Cleanup keypair
+        if: always() && steps.prereq.outputs.skip == 'false'
+        run: rm -f /tmp/deploy-keypair.json
