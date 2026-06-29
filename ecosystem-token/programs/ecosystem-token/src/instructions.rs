@@ -1,45 +1,34 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{mint_to, transfer, Mint, MintTo, Token, TokenAccount, Transfer},
+    token::{mint_to, transfer, Burn, Mint, MintTo, Token, TokenAccount, Transfer},
 };
 
 use crate::errors::EcosystemError::*;
+use crate::morpho::*;
 use crate::state::*;
 
 // ============================================================================
-// INITIALIZATION INSTRUCTIONS
+// INITIALIZATION
 // ============================================================================
 
 pub fn initialize_launchpad(
     ctx: Context<InitializeLaunchpad>,
-    token_bump: u8,
-    vault_bump: u8,
+    _bump: u8,
 ) -> Result<()> {
     let launchpad = &mut ctx.accounts.launchpad_state;
-    
+    launchpad.authority = ctx.accounts.authority.key();
     launchpad.token_mint = ctx.accounts.token_mint.key();
     launchpad.usdc_mint = ctx.accounts.usdc_mint.key();
-    launchpad.vault = ctx.accounts.vault.key();
+    launchpad.usdc_vault = ctx.accounts.usdc_vault.key();
+    launchpad.vault = ctx.accounts.usdc_vault.key();
     launchpad.tax_vault = ctx.accounts.tax_vault.key();
     launchpad.mint_authority = ctx.accounts.vault_pda.key();
-    launchpad.authority = ctx.accounts.authority.key();
-    launchpad.total_usdc_raised = 0;
     launchpad.total_tokens_minted = 0;
-    launchpad.tier1_price = 1_000_000; // Fixed peg reference: 1 USDC = 1 token (same 6 decimals)
-    launchpad.current_discount = 0;    // No discount - fixed 1:1 peg always
-    launchpad.discount_threshold_1 = u64::MAX; // Unused - fixed peg
-    launchpad.discount_threshold_2 = u64::MAX; // Unused - fixed peg
+    launchpad.total_usdc_raised = 0;
     launchpad.paused = false;
-    launchpad.bump = token_bump;
-
-    let yield_config = &mut ctx.accounts.yield_config;
-    let now = Clock::get()?.unix_timestamp;
-    yield_config.snapshot_frequency = 604_800; // 7 days
-    yield_config.last_snapshot = now;
-    yield_config.next_snapshot = now + 604_800;
-    yield_config.bump = ctx.bumps.yield_config;
-
+    launchpad.investment_pending_approval = true; // Blocked until admin approves a pool
+    launchpad.bump = ctx.bumps.launchpad_state;
     Ok(())
 }
 
@@ -47,93 +36,112 @@ pub fn initialize_treasury(
     ctx: Context<InitializeTreasury>,
     marketing_address: Pubkey,
     asset_manager_address: Pubkey,
-    owner_address: Pubkey,
+    protocol_address: Pubkey,
 ) -> Result<()> {
+    let now = Clock::get()?.unix_timestamp;
+
     let treasury = &mut ctx.accounts.treasury_vault;
-    treasury.aave_position = 0;
-    treasury.rwa_balance = 0;
-    treasury.total_deposited = 0;
+    treasury.authority = ctx.accounts.authority.key();
     treasury.total_usdc = 0;
+    treasury.total_deposited = 0;
     treasury.total_yields_earned = 0;
     treasury.total_yields_distributed = 0;
-    treasury.last_aave_claim = Clock::get()?.unix_timestamp;
-    treasury.last_rwa_sync = Clock::get()?.unix_timestamp;
-    treasury.authority = ctx.accounts.authority.key();
-    treasury.rwa_yield_earned = 0;
+    treasury.morpho_balance = 0;
+    treasury.morpho_yield_earned = 0;
+    treasury.liquid_usdc = 0;
+    treasury.last_update = now;
     treasury.bump = ctx.bumps.treasury_vault;
 
-    let revenue_dist = &mut ctx.accounts.revenue_distribution;
-    revenue_dist.user_percentage = 40;
-    revenue_dist.marketing_percentage = 20;
-    revenue_dist.asset_manager_percentage = 20;
-    revenue_dist.owner_percentage = 20;
-    revenue_dist.marketing_address = marketing_address;
-    revenue_dist.marketing_pct = 20;
-    revenue_dist.asset_manager_address = asset_manager_address;
-    revenue_dist.manager_pct = 20;
-    revenue_dist.owner_address = owner_address;
-    revenue_dist.owner_pct = 20;
-    revenue_dist.total_distributed = 0;
-    revenue_dist.user_pct = 40;
-    revenue_dist.authority = ctx.accounts.authority.key();
-    revenue_dist.user_percentage = 40;
-    revenue_dist.marketing_percentage = 20;
-    revenue_dist.asset_manager_percentage = 20;
-    revenue_dist.owner_percentage = 20;
-    revenue_dist.bump = ctx.bumps.revenue_distribution;
+    // Default revenue split: 25% / 25% / 25% / 25% (all equal, admin changes later)
+    let dist = &mut ctx.accounts.revenue_distribution;
+    dist.authority = ctx.accounts.authority.key();
+    dist.holder_share_bps = 2_500;
+    dist.marketing_share_bps = 2_500;
+    dist.asset_manager_share_bps = 2_500;
+    dist.protocol_share_bps = 2_500;
+    dist.marketing_address = marketing_address;
+    dist.asset_manager_address = asset_manager_address;
+    dist.protocol_address = protocol_address;
+    dist.investment_ratio_bps = INVESTMENT_RATIO_BPS; // 80%
+    dist.bump = ctx.bumps.revenue_distribution;
+
+    // Yield config — all holders auto-earn, no staking required
+    let yc = &mut ctx.accounts.yield_config;
+    yc.global_yield_index = YIELD_INDEX_PRECISION; // Start at 1.0
+    yc.normal_yield_bps = NORMAL_YIELD_BPS;        // 45%
+    yc.campaign_yield_bps = CAMPAIGN_YIELD_BPS;    // 70%
+    yc.campaign_duration_seconds = CAMPAIGN_DURATION_SECONDS;
+    yc.morpho_invested_usdc = 0;
+    yc.morpho_yield_earned = 0;
+    yc.last_index_update = now;
+    yc.investment_ratio_bps = INVESTMENT_RATIO_BPS;
+    yc.bump = ctx.bumps.yield_config;
 
     Ok(())
 }
 
 // ============================================================================
-// MINTING & REDEMPTION
+// MINT — Fixed 1:1 peg, fee from protocol treasury
 // ============================================================================
 
-pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -> Result<()> {
+/// Mint tokens at fixed 1 USDC = 1 token peg regardless of market price.
+/// Fee tiers:
+///   - Launchpad investor (whitelisted): 0.1% on ≤ original purchase, 0.5% on excess
+///   - All others: 0.5%
+/// ALL fees go 100% to protocol treasury.
+/// Buying immediately enrolls user in yield — no staking required.
+/// Campaign buyers (flagged via is_campaign) earn 70% APY for 6 months.
+pub fn mint_tokens(
+    ctx: Context<MintTokens>,
+    usdc_amount: u64,
+    is_campaign: bool,
+) -> Result<()> {
     require!(!ctx.accounts.launchpad_state.paused, LaunchpadPaused);
     require!(usdc_amount > 0, InsufficientUsdc);
 
+    let now = Clock::get()?.unix_timestamp;
     let launchpad = &mut ctx.accounts.launchpad_state;
+    let yc = &mut ctx.accounts.yield_config;
 
-    // ── FIXED PEG: 1 USDT = 1 token always ───────────────────────────
-    // Price is hardcoded at 1:1 and NEVER changes regardless of market
-    // Both token and USDC have 6 decimals → direct 1:1 ratio
-    let tokens_to_mint = usdc_amount; // 1 USDC micro-unit = 1 token micro-unit
+    // ── Accrue global yield index before any balance change ──────────
+    let elapsed = now.saturating_sub(yc.last_index_update).max(0);
+    yc.global_yield_index = accrue_yield_index(
+        yc.global_yield_index,
+        yc.normal_yield_bps,
+        elapsed,
+    );
+    yc.last_index_update = now;
 
-    let new_total = launchpad
-        .total_tokens_minted
-        .checked_add(tokens_to_mint)
-        .ok_or(MathOverflow)?;
-    // No supply cap - unlimited minting
+    // ── Fixed 1:1 peg ────────────────────────────────────────────────
+    // 1 USDC micro-unit = 1 token micro-unit (both 6 decimals)
+    let tokens_to_mint = usdc_amount;
 
-    // ── MINT TAX: 0.1% fee paid FROM the pool, NOT from user ─────────
-    // User always receives exactly 1 token per 1 USDC regardless of market.
-    // The 0.1% fee is sourced from pool reserves:
-    //   70% → treasury (invested in RUSDY via Jupiter DCA)
-    //   30% → yield pool (distributed to stakers)
-    let fee = tokens_to_mint
-        .checked_mul(1)
-        .ok_or(MathOverflow)?
-        .checked_div(1000)
-        .ok_or(MathOverflow)?;
-    let treasury_cut = fee.checked_mul(70).ok_or(MathOverflow)?.checked_div(100).ok_or(MathOverflow)?;
-    let yield_cut = fee.checked_sub(treasury_cut).ok_or(MathOverflow)?;
+    // ── Fee calculation ───────────────────────────────────────────────
+    let holder = &mut ctx.accounts.holder_info;
+    let fee_result = calculate_fee(
+        usdc_amount,
+        holder.is_launchpad_investor,
+        holder.launchpad_purchased_amount,
+    );
+    // Fee comes from the amount — user receives tokens_to_mint,
+    // protocol treasury receives fee from its own reserves
+    let protocol_fee = fee_result.total_fee;
 
-    // Transfer USDC from user to vault (full 1:1 amount — no extra charge)
+    // ── Transfer USDC from user to vault ────────────────────────────
     let transfer_ctx = CpiContext::new(
         ctx.accounts.token_program.to_account_info(),
         Transfer {
             from: ctx.accounts.user_usdc_ata.to_account_info(),
-            to: ctx.accounts.vault.to_account_info(),
+            to: ctx.accounts.usdc_vault.to_account_info(),
             authority: ctx.accounts.user.to_account_info(),
         },
     );
     transfer(transfer_ctx, usdc_amount)?;
 
+    // ── Mint tokens to user (full 1:1 amount) ───────────────────────
     let seeds = &[b"vault".as_ref(), &[launchpad.bump]];
-    let signer_seeds = &[&seeds[..]];
+    let signer = &[&seeds[..]];
 
-    // Mint full 1:1 tokens to user (user is NOT charged the fee)
     let mint_ctx = CpiContext::new_with_signer(
         ctx.accounts.token_program.to_account_info(),
         MintTo {
@@ -141,94 +149,95 @@ pub fn mint_tokens(ctx: Context<MintTokens>, usdc_amount: u64, is_tier2: bool) -
             to: ctx.accounts.user_token_ata.to_account_info(),
             authority: ctx.accounts.vault_pda.to_account_info(),
         },
-        signer_seeds,
+        signer,
     );
     mint_to(mint_ctx, tokens_to_mint)?;
 
-    // Mint fee from pool → treasury (70%) — pool absorbs this cost
-    let mint_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.to_account_info(),
-        MintTo {
-            mint: ctx.accounts.token_mint.to_account_info(),
-            to: ctx.accounts.treasury_token_ata.to_account_info(),
-            authority: ctx.accounts.vault_pda.to_account_info(),
-        },
-        signer_seeds,
-    );
-    mint_to(mint_ctx, treasury_cut)?;
-
-    // Mint fee from pool → yield vault (30%) — for staker rewards
-    let mint_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.to_account_info(),
-        MintTo {
-            mint: ctx.accounts.token_mint.to_account_info(),
-            to: ctx.accounts.yield_vault_ata.to_account_info(),
-            authority: ctx.accounts.vault_pda.to_account_info(),
-        },
-        signer_seeds,
-    );
-    mint_to(mint_ctx, yield_cut)?;
-
-    msg!(
-        "MINT: {} USDC → {} tokens at fixed 1:1 peg. Pool fee: {} tokens (70% treasury / 30% yield)",
-        usdc_amount, tokens_to_mint, fee
-    );
-
-    // Update user tier info
-    let user_tier = &mut ctx.accounts.user_tier_info;
-    user_tier.user = ctx.accounts.user.key();
-    user_tier.is_tier2 = is_tier2;
-    user_tier.tokens_purchased = tokens_to_mint;
-    user_tier.total_tokens_minted = tokens_to_mint;
-
-    if is_tier2 {
-        let now = Clock::get()?.unix_timestamp;
-        user_tier.vesting_start = now;
+    // ── Mint protocol fee to treasury (100% of fee) ─────────────────
+    if protocol_fee > 0 {
+        let fee_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            MintTo {
+                mint: ctx.accounts.token_mint.to_account_info(),
+                to: ctx.accounts.protocol_treasury_ata.to_account_info(),
+                authority: ctx.accounts.vault_pda.to_account_info(),
+            },
+            signer,
+        );
+        mint_to(fee_ctx, protocol_fee)?;
     }
 
-    user_tier.bump = ctx.bumps.user_tier_info;
+    // ── Update holder info — snapshot yield index at purchase ────────
+    // Accrue any pending yield before updating balance
+    let pending_yield = calculate_holder_yield(
+        yc.global_yield_index,
+        holder.yield_index_snapshot,
+        holder.token_balance,
+    );
+    holder.unclaimed_yield = holder.unclaimed_yield.saturating_add(pending_yield);
+    holder.yield_index_snapshot = yc.global_yield_index;
+    holder.token_balance = holder.token_balance.saturating_add(tokens_to_mint);
 
-    // Update launchpad state
-    launchpad.total_usdc_raised = launchpad
-        .total_usdc_raised
-        .checked_add(usdc_amount)
-        .ok_or(MathOverflow)?;
-    launchpad.total_tokens_minted = new_total;
+    // Campaign yield: 70% APY for 6 months from first purchase
+    if is_campaign && holder.campaign_expires_at == 0 {
+        holder.campaign_expires_at = now.saturating_add(yc.campaign_duration_seconds);
+    }
+
+    // Update launchpad totals
+    launchpad.total_tokens_minted = launchpad.total_tokens_minted.saturating_add(tokens_to_mint);
+    launchpad.total_usdc_raised = launchpad.total_usdc_raised.saturating_add(usdc_amount);
+
+    msg!(
+        "MINT: {} USDC → {} tokens at 1:1 peg. Fee: {} ({}). Campaign: {}",
+        usdc_amount,
+        tokens_to_mint,
+        protocol_fee,
+        if holder.is_launchpad_investor { "launchpad rate" } else { "standard rate" },
+        is_campaign
+    );
 
     Ok(())
 }
 
+// ============================================================================
+// BURN — Fixed 1:1 peg, fee to protocol treasury
+// ============================================================================
+
 /// Burn tokens and receive USDC back at fixed 1:1 peg.
-/// Price is ALWAYS 1 token = 1 USDC regardless of market conditions.
-/// 0.1% fee is absorbed by the pool (NOT deducted from user's USDC return).
-///   70% of fee → treasury (invested in RUSDY via Jupiter)
-///   30% of fee → yield pool (distributed to stakers)
-/// Tier 2 tokens cannot be burned — they must complete the unstake flow.
+/// Price NEVER changes regardless of external market.
+/// Fee tiers same as mint. All fees → 100% protocol treasury.
 pub fn burn_tokens(ctx: Context<BurnTokens>, token_amount: u64) -> Result<()> {
     require!(!ctx.accounts.launchpad_state.paused, LaunchpadPaused);
-
-    let user_tier = &ctx.accounts.user_tier_info;
-    require!(!user_tier.is_tier2, CannotRedeemTier2);
     require!(token_amount > 0, InvalidRedeemAmount);
 
-    // ── FIXED PEG: 1 token = 1 USDC always ───────────────────────────
-    // User gets back full 1:1 USDC regardless of market price.
-    // 6-decimal parity: token_amount micro-tokens = token_amount micro-USDC
-    let usdc_to_return = token_amount; // 1:1 fixed peg
+    let now = Clock::get()?.unix_timestamp;
+    let launchpad = &ctx.accounts.launchpad_state;
+    let yc = &mut ctx.accounts.yield_config;
 
-    // ── BURN FEE: 0.1% absorbed by pool ───────────────────────────────
-    // Fee is NOT deducted from user's USDC. Pool covers this cost.
-    // Pool earns from yield/RUSDY investment to sustain this subsidy.
-    let fee = token_amount
-        .checked_mul(1)
-        .ok_or(MathOverflow)?
-        .checked_div(1000)
-        .ok_or(MathOverflow)?;
-    let treasury_cut = fee.checked_mul(70).ok_or(MathOverflow)?.checked_div(100).ok_or(MathOverflow)?;
-    let yield_cut = fee.checked_sub(treasury_cut).ok_or(MathOverflow)?;
+    // ── Accrue global yield index before balance change ──────────────
+    let elapsed = now.saturating_sub(yc.last_index_update).max(0);
+    yc.global_yield_index = accrue_yield_index(
+        yc.global_yield_index,
+        yc.normal_yield_bps,
+        elapsed,
+    );
+    yc.last_index_update = now;
 
-    // Burn ALL the user's tokens (destroy them completely)
-    use anchor_spl::token::Burn;
+    // ── Fee calculation ───────────────────────────────────────────────
+    let holder = &mut ctx.accounts.holder_info;
+    require!(holder.token_balance >= token_amount, InsufficientTokens);
+
+    let fee_result = calculate_fee(
+        token_amount,
+        holder.is_launchpad_investor,
+        holder.launchpad_purchased_amount,
+    );
+    let protocol_fee = fee_result.total_fee;
+
+    // ── Fixed 1:1 USDC return ────────────────────────────────────────
+    let usdc_to_return = token_amount; // 1:1 always
+
+    // ── Burn ALL user's tokens ───────────────────────────────────────
     let burn_ctx = CpiContext::new(
         ctx.accounts.token_program.to_account_info(),
         Burn {
@@ -239,463 +248,426 @@ pub fn burn_tokens(ctx: Context<BurnTokens>, token_amount: u64) -> Result<()> {
     );
     anchor_spl::token::burn(burn_ctx, token_amount)?;
 
-    // Return full 1:1 USDC to user from vault
+    // ── Return full 1:1 USDC to user ────────────────────────────────
+    let seeds = &[b"vault".as_ref(), &[launchpad.bump]];
+    let signer = &[&seeds[..]];
+
+    let usdc_ctx = CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.usdc_vault.to_account_info(),
+            to: ctx.accounts.user_usdc_ata.to_account_info(),
+            authority: ctx.accounts.vault_pda.to_account_info(),
+        },
+        signer,
+    );
+    transfer(usdc_ctx, usdc_to_return)?;
+
+    // ── Protocol fee: transferred from vault reserves ────────────────
+    if protocol_fee > 0 {
+        let fee_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.usdc_vault.to_account_info(),
+                to: ctx.accounts.protocol_treasury_ata.to_account_info(),
+                authority: ctx.accounts.vault_pda.to_account_info(),
+            },
+            signer,
+        );
+        transfer(fee_ctx, protocol_fee)?;
+    }
+
+    // ── Update holder yield snapshot before balance change ───────────
+    let pending_yield = calculate_holder_yield(
+        yc.global_yield_index,
+        holder.yield_index_snapshot,
+        holder.token_balance,
+    );
+    holder.unclaimed_yield = holder.unclaimed_yield.saturating_add(pending_yield);
+    holder.yield_index_snapshot = yc.global_yield_index;
+    holder.token_balance = holder.token_balance.saturating_sub(token_amount);
+
+    msg!(
+        "BURN: {} tokens → {} USDC at 1:1 peg. Fee: {} to protocol treasury.",
+        token_amount,
+        usdc_to_return,
+        protocol_fee
+    );
+
+    Ok(())
+}
+
+// ============================================================================
+// YIELD CLAIM — Auto-yield, no staking needed
+// ============================================================================
+
+/// Claim accumulated yield. Any holder earns automatically just by holding.
+/// Yield is calculated from the global index delta since last snapshot.
+pub fn claim_yield(ctx: Context<ClaimYield>) -> Result<()> {
+    let now = Clock::get()?.unix_timestamp;
+    let yc = &mut ctx.accounts.yield_config;
+    let holder = &mut ctx.accounts.holder_info;
+
+    // Accrue index to now
+    let elapsed = now.saturating_sub(yc.last_index_update).max(0);
+
+    // Use campaign APY if eligible, else normal
+    let apy = holder_apy_bps(holder.campaign_expires_at, now);
+    yc.global_yield_index = accrue_yield_index(yc.global_yield_index, apy, elapsed);
+    yc.last_index_update = now;
+
+    // Calculate claimable yield
+    let new_yield = calculate_holder_yield(
+        yc.global_yield_index,
+        holder.yield_index_snapshot,
+        holder.token_balance,
+    );
+    let total_claimable = holder.unclaimed_yield.saturating_add(new_yield);
+    require!(total_claimable > 0, NoYieldToClaim);
+
+    // Reset holder snapshot
+    holder.yield_index_snapshot = yc.global_yield_index;
+    holder.unclaimed_yield = 0;
+
+    // Transfer yield USDC from treasury to user
     let seeds = &[b"vault".as_ref(), &[ctx.accounts.launchpad_state.bump]];
-    let signer_seeds = &[&seeds[..]];
+    let signer = &[&seeds[..]];
 
     let transfer_ctx = CpiContext::new_with_signer(
         ctx.accounts.token_program.to_account_info(),
         Transfer {
-            from: ctx.accounts.vault.to_account_info(),
+            from: ctx.accounts.yield_usdc_vault.to_account_info(),
             to: ctx.accounts.user_usdc_ata.to_account_info(),
             authority: ctx.accounts.vault_pda.to_account_info(),
         },
-        signer_seeds,
+        signer,
     );
-    transfer(transfer_ctx, usdc_to_return)?;
-
-    // Pool covers fee: transfer from pool reserves to treasury (70%)
-    let pool_fee_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.to_account_info(),
-        Transfer {
-            from: ctx.accounts.vault.to_account_info(),
-            to: ctx.accounts.treasury_token_ata.to_account_info(),
-            authority: ctx.accounts.vault_pda.to_account_info(),
-        },
-        signer_seeds,
-    );
-    transfer(pool_fee_ctx, treasury_cut)?;
-
-    // Pool covers fee: transfer from pool reserves to yield vault (30%)
-    let yield_fee_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.to_account_info(),
-        Transfer {
-            from: ctx.accounts.vault.to_account_info(),
-            to: ctx.accounts.yield_vault_ata.to_account_info(),
-            authority: ctx.accounts.vault_pda.to_account_info(),
-        },
-        signer_seeds,
-    );
-    transfer(yield_fee_ctx, yield_cut)?;
+    transfer(transfer_ctx, total_claimable)?;
 
     msg!(
-        "BURN: {} tokens → {} USDC at fixed 1:1 peg. Pool fee: {} USDC (70% treasury / 30% yield)",
-        token_amount, usdc_to_return, fee
+        "YIELD CLAIM: {} USDC (APY: {}bps, campaign: {})",
+        total_claimable,
+        apy,
+        holder.campaign_expires_at > now
     );
 
     Ok(())
 }
 
 // ============================================================================
-// STAKING & YIELD
+// UNSTAKING — 48 business-hour countdown (weekend-paused)
 // ============================================================================
 
-pub fn stake_tokens(ctx: Context<StakeTokens>, amount: u64) -> Result<()> {
-    require!(amount > 0, InsufficientTokens);
-
-    let user_tier = &ctx.accounts.user_tier_info;
-
-    // Ensure tokens are not vesting-locked
-    if user_tier.is_tier2 {
-        {
-            let now = Clock::get()?.unix_timestamp;
-            let vesting_start = user_tier.vesting_start;
-            let vesting_duration: i64 = 365 * 24 * 3600;
-            let elapsed = (now - vesting_start).max(0);
-            let vested = user_tier.tokens_purchased
-                .checked_mul(elapsed as u64)
-                .unwrap_or(0)
-                .checked_div(vesting_duration as u64)
-                .unwrap_or(0);
-            require!(vested >= amount, VestingLocked);
-        }
-    }
-
-    // Transfer tokens to staking vault
-    let transfer_ctx = CpiContext::new(
-        ctx.accounts.token_program.to_account_info(),
-        Transfer {
-            from: ctx.accounts.user_token_ata.to_account_info(),
-            to: ctx.accounts.staking_vault.to_account_info(),
-            authority: ctx.accounts.user.to_account_info(),
-        },
-    );
-    transfer(transfer_ctx, amount)?;
-
-    // Update staking info
-    let staking_info = &mut ctx.accounts.staking_info;
-    staking_info.user = ctx.accounts.user.key();
-    staking_info.staked_amount = staking_info
-        .staked_amount
-        .checked_add(amount)
-        .ok_or(MathOverflow)?;
-    staking_info.staked_at = Clock::get()?.unix_timestamp;
-    staking_info.bump = ctx.bumps.staking_info;
-
-    Ok(())
-}
-
-/// Step 1 of 2 for unstaking: starts the 48 business-hour countdown.
-/// During this period, the off-chain keeper routes funds from RUSDY → USDC via Jupiter.
-/// The user sees a countdown timer in the dashboard with weekend-pause logic.
+/// Step 1: Request to exit. Starts 48 business-hour countdown.
+/// During this period, Morpho position unwinds and USDC is routed back.
 pub fn request_unstake(ctx: Context<RequestUnstake>, amount: u64) -> Result<()> {
     require!(amount > 0, InsufficientTokens);
 
-    let staking_info = &mut ctx.accounts.staking_info;
-    require!(staking_info.staked_amount >= amount, NoStakedTokens);
+    let holder = &mut ctx.accounts.holder_info;
+    require!(holder.token_balance >= amount, InsufficientTokens);
 
     let now = Clock::get()?.unix_timestamp;
 
-    // Deduct from staked balance immediately
-    staking_info.staked_amount = staking_info
-        .staked_amount
-        .checked_sub(amount)
-        .ok_or(MathOverflow)?;
+    // Accrue yield before reducing balance
+    let yc = &ctx.accounts.yield_config;
+    let pending = calculate_holder_yield(
+        yc.global_yield_index,
+        holder.yield_index_snapshot,
+        holder.token_balance,
+    );
+    holder.unclaimed_yield = holder.unclaimed_yield.saturating_add(pending);
+    holder.yield_index_snapshot = yc.global_yield_index;
+    holder.token_balance = holder.token_balance.saturating_sub(amount);
 
-    // Record the unstaking request with timestamp for countdown
     let request = &mut ctx.accounts.unstaking_request;
     request.user = ctx.accounts.user.key();
     request.amount = amount;
-    request.usdc_to_return = amount; // 1:1 peg (USDC equivalent)
+    request.usdc_to_return = amount; // 1:1 peg
     request.requested_at = now;
     request.completed = false;
     request.emergency_redeemed = false;
     request.bump = ctx.bumps.unstaking_request;
 
     msg!(
-        "Unstake requested: {} tokens. Your funds are being routed from RUSDY (real world assets) back to USDC. This may take up to 48 business hours due to regulatory requirements. Timer pauses on weekends.",
+        "UNSTAKE REQUEST: {} tokens. Your funds are being routed from Morpho back to USDC. \
+         This takes up to 48 business hours (Mon-Fri) due to regulatory compliance. \
+         Timer pauses on weekends.",
         amount
     );
 
     Ok(())
 }
 
-/// Step 2 of 2: Complete the unstake after 48 business hours have elapsed.
-/// Weekends do NOT count toward the 48-hour requirement.
+/// Step 2: Complete after 48 business hours. Weekends excluded from timer.
 pub fn complete_unstake(ctx: Context<CompleteUnstake>) -> Result<()> {
     let request = &mut ctx.accounts.unstaking_request;
     require!(!request.completed, UnstakeAlreadyCompleted);
     require!(!request.emergency_redeemed, UnstakeAlreadyCompleted);
 
     let now = Clock::get()?.unix_timestamp;
-
-    // Calculate business seconds elapsed (Mon–Fri only, weekends excluded)
     let elapsed = crate::rwa::business_seconds_elapsed(request.requested_at, now);
-
-    require!(
-        elapsed >= crate::rwa::UNSTAKE_BUSINESS_SECONDS,
-        UnstakeCooldownNotMet
-    );
+    require!(elapsed >= crate::rwa::UNSTAKE_BUSINESS_SECONDS, UnstakeCooldownNotMet);
 
     request.completed = true;
 
-    // Transfer tokens back to user
-    let transfer_ctx = CpiContext::new(
+    // Return tokens to user
+    let seeds = &[b"vault".as_ref(), &[ctx.accounts.launchpad_state.bump]];
+    let signer = &[&seeds[..]];
+
+    let transfer_ctx = CpiContext::new_with_signer(
         ctx.accounts.token_program.to_account_info(),
         Transfer {
-            from: ctx.accounts.staking_vault.to_account_info(),
-            to: ctx.accounts.user_token_ata.to_account_info(),
-            authority: ctx.accounts.staking_vault.to_account_info(),
+            from: ctx.accounts.usdc_vault.to_account_info(),
+            to: ctx.accounts.user_usdc_ata.to_account_info(),
+            authority: ctx.accounts.vault_pda.to_account_info(),
         },
+        signer,
+    );
+    transfer(transfer_ctx, request.usdc_to_return)?;
+
+    msg!("UNSTAKE COMPLETE: {} USDC returned after 48 business hours.", request.usdc_to_return);
+    Ok(())
+}
+
+/// Emergency exit: immediate but exposes user to AMM slippage.
+pub fn emergency_redeem_defi(ctx: Context<EmergencyRedeemDefi>) -> Result<()> {
+    let request = &mut ctx.accounts.unstaking_request;
+    require!(!request.completed, UnstakeAlreadyCompleted);
+    require!(!request.emergency_redeemed, UnstakeAlreadyCompleted);
+
+    request.emergency_redeemed = true;
+    request.completed = true;
+
+    let seeds = &[b"vault".as_ref(), &[ctx.accounts.launchpad_state.bump]];
+    let signer = &[&seeds[..]];
+
+    let transfer_ctx = CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        Transfer {
+            from: ctx.accounts.usdc_vault.to_account_info(),
+            to: ctx.accounts.user_usdc_ata.to_account_info(),
+            authority: ctx.accounts.vault_pda.to_account_info(),
+        },
+        signer,
     );
     transfer(transfer_ctx, request.amount)?;
 
     msg!(
-        "Unstake complete: {} tokens returned to user after 48 business hours.",
+        "EMERGENCY DEFI REDEMPTION: {} tokens redeemed immediately. \
+         WARNING: Transaction subject to potential high slippage due to AMM \
+         market conditions. This bypasses the standard 48-hour Morpho unwinding process.",
         request.amount
     );
 
     Ok(())
 }
 
-/// Emergency DeFi redemption: bypasses the 48hr wait but exposes
-/// the user to AMM slippage because RUSDY must be swapped immediately
-/// via Jupiter at current market prices rather than via DCA routing.
-pub fn emergency_redeem_defi(ctx: Context<EmergencyRedeemDefi>) -> Result<()> {
-    let request = &mut ctx.accounts.unstaking_request;
-    require!(!request.completed, UnstakeAlreadyCompleted);
-    require!(!request.emergency_redeemed, UnstakeAlreadyCompleted);
-
-    let amount = request.amount;
-    request.emergency_redeemed = true;
-    request.completed = true;
-
-    // In production: trigger immediate Jupiter swap RUSDY → USDC
-    // Slippage is NOT protected here — user accepts AMM market risk
-    let transfer_ctx = CpiContext::new(
-        ctx.accounts.token_program.to_account_info(),
-        Transfer {
-            from: ctx.accounts.staking_vault.to_account_info(),
-            to: ctx.accounts.user_token_ata.to_account_info(),
-            authority: ctx.accounts.staking_vault.to_account_info(),
-        },
-    );
-    transfer(transfer_ctx, amount)?;
-
-    msg!(
-        "EMERGENCY DeFi redemption executed: {} tokens. WARNING: Your transaction was subject to potential high slippage due to AMM market conditions. This is a result of bypassing the standard 48-hour DCA routing process.",
-        amount
-    );
-
-    Ok(())
-}
-
-pub fn create_yield_snapshot(ctx: Context<CreateYieldSnapshot>) -> Result<()> {
-    let yield_config = &mut ctx.accounts.yield_config;
-    let now = Clock::get()?.unix_timestamp;
-
-    require!(now >= yield_config.next_snapshot, SnapshotFrequencyNotMet);
-
-    // Create new snapshot
-    let snapshot = &mut ctx.accounts.yield_snapshot;
-    snapshot.snapshot_ts = now;
-    snapshot.snapshot_time = now;
-    snapshot.total_staked = 0; // Would be summed from all StakingInfo in production
-    snapshot.yield_amount = ctx.accounts.tax_vault.amount;
-    snapshot.tax_collected = ctx.accounts.tax_vault.amount;
-    snapshot.is_distributed = true;
-    snapshot.bump = ctx.bumps.yield_snapshot;
-
-    // Update yield config
-    yield_config.last_snapshot = now;
-    yield_config.next_snapshot = now + yield_config.snapshot_frequency;
-    yield_config.snapshot_frequency = yield_config.snapshot_frequency;
-
-    Ok(())
-}
-
-pub fn claim_yield(ctx: Context<ClaimYield>) -> Result<()> {
-    let staking_info = &ctx.accounts.staking_info;
-    require!(staking_info.staked_amount > 0, NoStakedTokens);
-
-    let snapshot = &ctx.accounts.yield_snapshot;
-    require!(snapshot.is_distributed, YieldSnapshotNotReady);
-    require!(snapshot.total_staked > 0, NoYieldToClaim);
-
-    // Calculate pro-rata yield
-    let user_share = (staking_info.staked_amount as u128)
-        .checked_mul(snapshot.yield_amount as u128)
-        .ok_or(MathOverflow)?
-        .checked_div(snapshot.total_staked as u128)
-        .ok_or(MathOverflow)? as u64;
-
-    require!(user_share > 0, NoYieldToClaim);
-
-    // Transfer yield to user
-    let transfer_ctx = CpiContext::new(
-        ctx.accounts.token_program.to_account_info(),
-        Transfer {
-            from: ctx.accounts.tax_vault.to_account_info(),
-            to: ctx.accounts.user_usdc_ata.to_account_info(),
-            authority: ctx.accounts.user.to_account_info(),
-        },
-    );
-    transfer(transfer_ctx, user_share)?;
-
-    // Update staking info
-    let mut staking_mut = ctx.accounts.staking_info.clone();
-    staking_mut.last_claim = Clock::get()?.unix_timestamp;
-    staking_mut.last_claim_ts = Clock::get()?.unix_timestamp;
-    staking_mut.total_yield_claimed = staking_mut
-        .total_yield_claimed
-        .checked_add(user_share)
-        .ok_or(MathOverflow)?;
-
-    Ok(())
-}
-
 // ============================================================================
-// ADMIN INSTRUCTIONS
+// MORPHO INVESTMENT — Admin approval required before investing
 // ============================================================================
 
-pub fn set_tier2_whitelist(
-    ctx: Context<SetTier2Whitelist>,
-    is_whitelisted: bool,
-) -> Result<()> {
-    let whitelist = &mut ctx.accounts.tier2_whitelist;
-    whitelist.user = ctx.accounts.target_user.key();
-    whitelist.is_whitelisted = is_whitelisted;
-    whitelist.whitelisted_at = if is_whitelisted {
-        Clock::get()?.unix_timestamp
-    } else {
-        0
-    };
-    whitelist.authority = ctx.accounts.authority.key();
-    whitelist.bump = ctx.bumps.tier2_whitelist;
-
-    Ok(())
-}
-
-/// Invest treasury USDC into RUSDY via Jupiter DCA routing.
-/// 70% of treasury tax goes here (replacing Aave).
-/// Actual Jupiter swap is executed by off-chain keeper to prevent MEV.
-pub fn invest_in_rwa(ctx: Context<InvestInRwa>, amount: u64) -> Result<()> {
-    require!(amount > 0, InvalidRwaAmount);
-
-    let treasury = &mut ctx.accounts.treasury_vault;
-    let yield_config = &mut ctx.accounts.yield_config;
-    let now = Clock::get()?.unix_timestamp;
-
-    // Validate we have enough treasury balance
-    require!(treasury.total_usdc >= amount, InsufficientTreasury);
-
-    // Calculate USDC to route through Jupiter DCA → RUSDY
-    let usdc_to_invest = crate::rwa::record_rwa_investment(amount, 70);
-
-    // Update state: record pending RUSDY investment
-    treasury.rwa_balance = treasury
-        .rwa_balance
-        .checked_add(usdc_to_invest)
-        .ok_or(MathOverflow)?;
-
-    treasury.total_usdc = treasury
-        .total_usdc
-        .checked_sub(usdc_to_invest)
-        .ok_or(MathOverflow)?;
-
-    yield_config.rwa_invested_usdc = yield_config
-        .rwa_invested_usdc
-        .checked_add(usdc_to_invest)
-        .ok_or(MathOverflow)?;
-
-    yield_config.last_investment_ts = now;
-
-    msg!(
-        "RWA investment queued: {} USDC routed to RUSDY via Jupiter DCA. Keeper will execute swap across multiple blocks to minimize slippage.",
-        usdc_to_invest
-    );
-
-    Ok(())
-}
-
-/// Claim yield earned on RUSDY investment.
-/// Yield accrues at ~5% APY on the invested USDC equivalent.
-pub fn claim_rwa_yields(ctx: Context<ClaimRwaYields>) -> Result<()> {
-    let treasury = &mut ctx.accounts.treasury_vault;
-    let yield_config = &mut ctx.accounts.yield_config;
-    let now = Clock::get()?.unix_timestamp;
-
-    let seconds_elapsed = now
-        .checked_sub(yield_config.last_investment_ts)
-        .unwrap_or(0) as u64;
-
-    let interest = crate::rwa::calculate_rwa_yield(
-        yield_config.rwa_invested_usdc,
-        seconds_elapsed,
-    )?;
-
-    require!(interest > 0, NoRwaYield);
-
-    treasury.rwa_yield_earned = treasury
-        .total_yields_earned
-        .checked_add(interest)
-        .ok_or(MathOverflow)?;
-
-    treasury.total_yields_earned = treasury
-        .total_yields_earned
-        .checked_add(interest)
-        .ok_or(MathOverflow)?;
-
-    yield_config.last_investment_ts = now;
-
-    msg!(
-        "RUSDY yield claimed: {} USDC earned from RWA investment at ~5% APY.",
-        interest
-    );
-
-    Ok(())
-}
-
-pub fn distribute_revenue(ctx: Context<DistributeRevenue>) -> Result<()> {
-    let revenue_dist = &ctx.accounts.revenue_distribution;
-    let treasury = &ctx.accounts.treasury_vault;
-
-    require!(treasury.total_yields_earned > treasury.total_yields_distributed, InsufficientYield);
-
-    let available = treasury
-        .total_yields_earned
-        .checked_sub(treasury.total_yields_distributed)
-        .ok_or(MathOverflow)?;
-
-    // Calculate distributions
-    let user_share = available
-        .checked_mul(revenue_dist.user_pct as u64)
-        .ok_or(MathOverflow)?
-        .checked_div(100)
-        .ok_or(MathOverflow)?;
-    
-    let marketing_share = available
-        .checked_mul(revenue_dist.marketing_pct as u64)
-        .ok_or(MathOverflow)?
-        .checked_div(100)
-        .ok_or(MathOverflow)?;
-
-    let manager_share = available
-        .checked_mul(revenue_dist.manager_pct as u64)
-        .ok_or(MathOverflow)?
-        .checked_div(100)
-        .ok_or(MathOverflow)?;
-
-    let owner_share = available
-        .checked_mul(revenue_dist.owner_pct as u64)
-        .ok_or(MathOverflow)?
-        .checked_div(100)
-        .ok_or(MathOverflow)?;
-
-    // In production: Transfer shares to respective addresses
-    // For now: Just update treasury tracking
-    let mut treasury_mut = ctx.accounts.treasury_vault.clone();
-    treasury_mut.total_yields_distributed = treasury_mut
-        .total_yields_distributed
-        .checked_add(user_share + marketing_share + manager_share + owner_share)
-        .ok_or(MathOverflow)?;
-
-    Ok(())
-}
-
-pub fn update_allocation_percentages(
-    ctx: Context<UpdateAllocationPercentages>,
-    user_pct: u8,
-    marketing_pct: u8,
-    manager_pct: u8,
-    owner_pct: u8,
+/// Admin proposes a Morpho pool. Must pass eligibility check.
+/// Pool is NOT active until admin approves via approve_morpho_pool.
+pub fn propose_morpho_pool(
+    ctx: Context<ProposeMorphoPool>,
+    pool_name: [u8; 64],
+    pool_type: MorphoPoolType,
+    apy_bps: u64,
 ) -> Result<()> {
     require!(
-        (user_pct + marketing_pct + manager_pct + owner_pct) == 100,
-        InvalidDistributionPercentages
+        ctx.accounts.launchpad_state.authority == ctx.accounts.authority.key(),
+        Unauthorized
+    );
+    require!(is_eligible_pool_type(&pool_type), IneligiblePoolType);
+
+    let pool = &mut ctx.accounts.morpho_pool;
+    pool.pool_address = ctx.accounts.pool_address.key();
+    pool.pool_name = pool_name;
+    pool.pool_type = pool_type;
+    pool.apy_bps = apy_bps;
+    pool.approved = false; // Admin must approve separately
+    pool.is_active = false;
+    pool.invested_usdc = 0;
+    pool.approved_at = 0;
+    pool.bump = ctx.bumps.morpho_pool;
+
+    msg!("Morpho pool proposed. Awaiting admin approval before investment can begin.");
+    Ok(())
+}
+
+/// Admin approves a proposed Morpho pool — investment becomes unblocked.
+pub fn approve_morpho_pool(ctx: Context<ApproveMorphoPool>) -> Result<()> {
+    require!(
+        ctx.accounts.launchpad_state.authority == ctx.accounts.authority.key(),
+        Unauthorized
     );
 
-    let revenue_dist = &mut ctx.accounts.revenue_distribution;
-    revenue_dist.user_pct = user_pct;
-    revenue_dist.user_percentage = user_pct;
-    revenue_dist.marketing_pct = marketing_pct;
-    revenue_dist.marketing_percentage = marketing_pct;
-    revenue_dist.manager_pct = manager_pct;
-    revenue_dist.asset_manager_percentage = manager_pct;
-    revenue_dist.owner_pct = owner_pct;
-    revenue_dist.owner_percentage = owner_pct;
+    let pool = &mut ctx.accounts.morpho_pool;
+    require!(is_eligible_pool_type(&pool.pool_type), IneligiblePoolType);
 
+    pool.approved = true;
+    pool.is_active = true;
+    pool.approved_at = Clock::get()?.unix_timestamp;
+
+    // Unblock investment on launchpad
+    ctx.accounts.launchpad_state.investment_pending_approval = false;
+
+    msg!("Morpho pool APPROVED. Investment is now enabled.");
     Ok(())
 }
 
-pub fn pause_launchpad(ctx: Context<PauseLaunchpad>) -> Result<()> {
-    let launchpad = &mut ctx.accounts.launchpad_state;
-    launchpad.paused = true;
+/// Invest 80% of liquid USDC into approved Morpho pool.
+/// Off-chain keeper executes the actual cross-chain transfer.
+pub fn invest_in_morpho(ctx: Context<InvestInMorpho>, amount: u64) -> Result<()> {
+    require!(
+        !ctx.accounts.launchpad_state.investment_pending_approval,
+        InvestmentPendingApproval
+    );
+    require!(ctx.accounts.morpho_pool.approved, PoolNotApproved);
+    require!(ctx.accounts.morpho_pool.is_active, PoolNotActive);
+    require!(amount > 0, InvalidInvestmentAmount);
+
+    let treasury = &mut ctx.accounts.treasury_vault;
+    require!(treasury.liquid_usdc >= amount, InsufficientTreasury);
+
+    let dist = &ctx.accounts.revenue_distribution;
+    let max_investable = calculate_investment_amount(treasury.total_usdc, dist.investment_ratio_bps);
+    require!(amount <= max_investable, InvalidInvestmentAmount);
+
+    treasury.liquid_usdc = treasury.liquid_usdc.saturating_sub(amount);
+    treasury.morpho_balance = treasury.morpho_balance.saturating_add(amount);
+
+    let pool = &mut ctx.accounts.morpho_pool;
+    pool.invested_usdc = pool.invested_usdc.saturating_add(amount);
+
+    let yc = &mut ctx.accounts.yield_config;
+    yc.morpho_invested_usdc = yc.morpho_invested_usdc.saturating_add(amount);
+
+    msg!(
+        "MORPHO INVESTMENT: {} USDC queued for investment. \
+         Keeper will execute cross-chain transfer to Morpho pool.",
+        amount
+    );
     Ok(())
 }
 
-pub fn resume_launchpad(ctx: Context<ResumeLaunchpad>) -> Result<()> {
-    let launchpad = &mut ctx.accounts.launchpad_state;
-    launchpad.paused = false;
+/// Keeper reports Morpho yield back on-chain.
+pub fn report_morpho_yield(ctx: Context<ReportMorphoYield>, yield_amount: u64) -> Result<()> {
+    require!(
+        ctx.accounts.launchpad_state.authority == ctx.accounts.authority.key(),
+        Unauthorized
+    );
+    require!(yield_amount > 0, NoMorphoYield);
+
+    let treasury = &mut ctx.accounts.treasury_vault;
+    treasury.morpho_yield_earned = treasury.morpho_yield_earned.saturating_add(yield_amount);
+    treasury.total_yields_earned = treasury.total_yields_earned.saturating_add(yield_amount);
+    treasury.liquid_usdc = treasury.liquid_usdc.saturating_add(yield_amount);
+
+    let yc = &mut ctx.accounts.yield_config;
+    yc.morpho_yield_earned = yc.morpho_yield_earned.saturating_add(yield_amount);
+
+    msg!("MORPHO YIELD REPORTED: {} USDC earned from Morpho pool.", yield_amount);
     Ok(())
 }
 
 // ============================================================================
-// CONTEXT DEFINITIONS
+// ADMIN — Revenue split management
+// ============================================================================
+
+/// Update revenue split ratios. Must sum to 10000 bps (100%).
+/// Admin can call this from the dashboard at any time.
+pub fn update_revenue_split(
+    ctx: Context<UpdateRevenueSplit>,
+    holder_bps: u64,
+    marketing_bps: u64,
+    asset_manager_bps: u64,
+    protocol_bps: u64,
+    investment_ratio_bps: u64,
+) -> Result<()> {
+    require!(
+        ctx.accounts.launchpad_state.authority == ctx.accounts.authority.key(),
+        Unauthorized
+    );
+    require!(
+        holder_bps + marketing_bps + asset_manager_bps + protocol_bps == 10_000,
+        InvalidDistributionShares
+    );
+    require!(
+        investment_ratio_bps <= 10_000,
+        InvalidInvestmentRatio
+    );
+
+    let dist = &mut ctx.accounts.revenue_distribution;
+    dist.holder_share_bps = holder_bps;
+    dist.marketing_share_bps = marketing_bps;
+    dist.asset_manager_share_bps = asset_manager_bps;
+    dist.protocol_share_bps = protocol_bps;
+    dist.investment_ratio_bps = investment_ratio_bps;
+
+    msg!(
+        "Revenue split updated: holders {}bps / marketing {}bps / manager {}bps / protocol {}bps. \
+         Investment ratio: {}bps",
+        holder_bps, marketing_bps, asset_manager_bps, protocol_bps, investment_ratio_bps
+    );
+    Ok(())
+}
+
+/// Distribute revenue to all parties based on current split ratios.
+pub fn distribute_revenue(ctx: Context<DistributeRevenue>) -> Result<()> {
+    let treasury = &mut ctx.accounts.treasury_vault;
+    require!(
+        treasury.total_yields_earned > treasury.total_yields_distributed,
+        InsufficientYield
+    );
+
+    let distributable = treasury.total_yields_earned
+        .saturating_sub(treasury.total_yields_distributed);
+
+    let dist = &ctx.accounts.revenue_distribution;
+
+    let holder_share = distributable.saturating_mul(dist.holder_share_bps).checked_div(10_000).unwrap_or(0);
+    let marketing_share = distributable.saturating_mul(dist.marketing_share_bps).checked_div(10_000).unwrap_or(0);
+    let manager_share = distributable.saturating_mul(dist.asset_manager_share_bps).checked_div(10_000).unwrap_or(0);
+    let protocol_share = distributable.saturating_mul(dist.protocol_share_bps).checked_div(10_000).unwrap_or(0);
+
+    treasury.total_yields_distributed = treasury.total_yields_distributed
+        .saturating_add(holder_share + marketing_share + manager_share + protocol_share);
+
+    msg!(
+        "Revenue distributed: {} holders / {} marketing / {} manager / {} protocol",
+        holder_share, marketing_share, manager_share, protocol_share
+    );
+    Ok(())
+}
+
+/// Pause launchpad (emergency use only)
+pub fn pause_launchpad(ctx: Context<PauseLaunchpad>) -> Result<()> {
+    require!(
+        ctx.accounts.launchpad_state.authority == ctx.accounts.authority.key(),
+        Unauthorized
+    );
+    ctx.accounts.launchpad_state.paused = true;
+    msg!("Launchpad PAUSED by authority.");
+    Ok(())
+}
+
+/// Resume launchpad
+pub fn resume_launchpad(ctx: Context<ResumeLaunchpad>) -> Result<()> {
+    require!(
+        ctx.accounts.launchpad_state.authority == ctx.accounts.authority.key(),
+        Unauthorized
+    );
+    ctx.accounts.launchpad_state.paused = false;
+    msg!("Launchpad RESUMED by authority.");
+    Ok(())
+}
+
+// ============================================================================
+// ACCOUNT STRUCTS
 // ============================================================================
 
 #[derive(Accounts)]
-#[instruction(token_bump: u8, vault_bump: u8)]
 pub struct InitializeLaunchpad<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -703,46 +675,26 @@ pub struct InitializeLaunchpad<'info> {
     #[account(
         init,
         payer = authority,
-        space = 8 + 32 * 6 + 8 * 4 + 1 * 5 + 1,
+        space = 8 + 32 * 7 + 8 * 2 + 1 * 3,
         seeds = [b"launchpad"],
         bump
     )]
     pub launchpad_state: Account<'info, LaunchpadState>,
 
-    #[account(
-        init,
-        payer = authority,
-        space = 8 + 8 * 2 + 8 + 1,
-        seeds = [b"yield-config"],
-        bump
-    )]
-    pub yield_config: Account<'info, YieldConfig>,
-
     pub token_mint: Account<'info, Mint>,
-    pub usdc_mint: Account<'info, Mint>,
 
-    #[account(
-        init,
-        payer = authority,
-        associated_token::mint = usdc_mint,
-        associated_token::authority = vault_pda
-    )]
-    pub vault: Account<'info, TokenAccount>,
+    /// CHECK: USDC mint address
+    pub usdc_mint: UncheckedAccount<'info>,
 
-    #[account(
-        init,
-        payer = authority,
-        associated_token::mint = token_mint,
-        associated_token::authority = vault_pda
-    )]
-    pub tax_vault: Account<'info, TokenAccount>,
+    /// CHECK: USDC vault
+    pub usdc_vault: UncheckedAccount<'info>,
+
+    /// CHECK: Tax vault
+    pub tax_vault: UncheckedAccount<'info>,
 
     /// CHECK: Vault PDA
-    #[account(seeds = [b"vault"], bump = vault_bump)]
     pub vault_pda: UncheckedAccount<'info>,
 
-    pub associated_token_program: Program<'info, AssociatedToken>,
-    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 
@@ -754,7 +706,7 @@ pub struct InitializeTreasury<'info> {
     #[account(
         init,
         payer = authority,
-        space = 8 + 8 * 4 + 8 + 32 + 1,
+        space = 8 + 32 + 8 * 8 + 8,
         seeds = [b"treasury-vault"],
         bump
     )]
@@ -763,11 +715,20 @@ pub struct InitializeTreasury<'info> {
     #[account(
         init,
         payer = authority,
-        space = 8 + 8 + 32 * 3 + 1 * 4,
+        space = 8 + 32 * 4 + 8 * 5,
         seeds = [b"revenue-dist"],
         bump
     )]
     pub revenue_distribution: Account<'info, RevenueDistribution>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + 16 + 8 * 7 + 8,
+        seeds = [b"yield-config"],
+        bump
+    )]
+    pub yield_config: Account<'info, YieldConfig>,
 
     pub system_program: Program<'info, System>,
 }
@@ -775,13 +736,13 @@ pub struct InitializeTreasury<'info> {
 #[derive(Accounts)]
 pub struct MintTokens<'info> {
     #[account(mut)]
-    pub authority: Signer<'info>,
-
-    #[account(mut)]
     pub user: Signer<'info>,
 
     #[account(mut, seeds = [b"launchpad"], bump = launchpad_state.bump)]
     pub launchpad_state: Account<'info, LaunchpadState>,
+
+    #[account(mut, seeds = [b"yield-config"], bump = yield_config.bump)]
+    pub yield_config: Account<'info, YieldConfig>,
 
     #[account(mut)]
     pub token_mint: Account<'info, Mint>,
@@ -793,15 +754,11 @@ pub struct MintTokens<'info> {
     pub user_token_ata: Account<'info, TokenAccount>,
 
     #[account(mut)]
-    pub vault: Account<'info, TokenAccount>,
+    pub usdc_vault: Account<'info, TokenAccount>,
 
-    /// Treasury token account receives 70% of mint tax
+    /// Protocol treasury receives 100% of fees
     #[account(mut)]
-    pub treasury_token_ata: Account<'info, TokenAccount>,
-
-    /// Yield pool receives 30% of mint tax for stakers
-    #[account(mut)]
-    pub yield_vault_ata: Account<'info, TokenAccount>,
+    pub protocol_treasury_ata: Account<'info, TokenAccount>,
 
     /// CHECK: Vault PDA authority
     pub vault_pda: UncheckedAccount<'info>,
@@ -809,13 +766,14 @@ pub struct MintTokens<'info> {
     #[account(
         init_if_needed,
         payer = user,
-        space = 8 + 32 + 1 + 50 + 8 + 1,
-        seeds = [b"user-tier", user.key().as_ref()],
+        space = 8 + 32 + 16 + 8 * 4 + 1 + 1,
+        seeds = [b"holder", user.key().as_ref()],
         bump
     )]
-    pub user_tier_info: Account<'info, UserTierInfo>,
+    pub holder_info: Account<'info, HolderInfo>,
 
     pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
 
@@ -827,6 +785,9 @@ pub struct BurnTokens<'info> {
     #[account(mut, seeds = [b"launchpad"], bump = launchpad_state.bump)]
     pub launchpad_state: Account<'info, LaunchpadState>,
 
+    #[account(mut, seeds = [b"yield-config"], bump = yield_config.bump)]
+    pub yield_config: Account<'info, YieldConfig>,
+
     #[account(mut)]
     pub token_mint: Account<'info, Mint>,
 
@@ -836,51 +797,47 @@ pub struct BurnTokens<'info> {
     #[account(mut)]
     pub user_usdc_ata: Account<'info, TokenAccount>,
 
-    /// Treasury token account receives 70% of burn tax
     #[account(mut)]
-    pub treasury_token_ata: Account<'info, TokenAccount>,
+    pub usdc_vault: Account<'info, TokenAccount>,
 
-    /// Yield pool receives 30% of burn tax for stakers
+    /// Protocol treasury receives 100% of fees
     #[account(mut)]
-    pub yield_vault_ata: Account<'info, TokenAccount>,
-
-    #[account(mut)]
-    pub vault: Account<'info, TokenAccount>,
+    pub protocol_treasury_ata: Account<'info, TokenAccount>,
 
     /// CHECK: Vault PDA authority
     pub vault_pda: UncheckedAccount<'info>,
 
-    #[account(seeds = [b"user-tier", user.key().as_ref()], bump = user_tier_info.bump)]
-    pub user_tier_info: Account<'info, UserTierInfo>,
-
-    pub token_program: Program<'info, Token>,
-}
-
-#[derive(Accounts)]
-pub struct StakeTokens<'info> {
-    #[account(mut)]
-    pub user: Signer<'info>,
-
-    #[account(mut)]
-    pub user_token_ata: Account<'info, TokenAccount>,
-
-    #[account(mut)]
-    pub staking_vault: Account<'info, TokenAccount>,
-
-    #[account(seeds = [b"user-tier", user.key().as_ref()], bump = user_tier_info.bump)]
-    pub user_tier_info: Account<'info, UserTierInfo>,
-
-    #[account(
-        init_if_needed,
-        payer = user,
-        space = 8 + 32 + 8 * 4 + 1,
-        seeds = [b"staking", user.key().as_ref()],
-        bump
-    )]
-    pub staking_info: Account<'info, StakingInfo>,
+    #[account(mut, seeds = [b"holder", user.key().as_ref()], bump = holder_info.bump)]
+    pub holder_info: Account<'info, HolderInfo>,
 
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimYield<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(seeds = [b"launchpad"], bump = launchpad_state.bump)]
+    pub launchpad_state: Account<'info, LaunchpadState>,
+
+    #[account(mut, seeds = [b"yield-config"], bump = yield_config.bump)]
+    pub yield_config: Account<'info, YieldConfig>,
+
+    #[account(mut)]
+    pub user_usdc_ata: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub yield_usdc_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: Vault PDA authority
+    pub vault_pda: UncheckedAccount<'info>,
+
+    #[account(mut, seeds = [b"holder", user.key().as_ref()], bump = holder_info.bump)]
+    pub holder_info: Account<'info, HolderInfo>,
+
+    pub token_program: Program<'info, Token>,
 }
 
 #[derive(Accounts)]
@@ -888,17 +845,16 @@ pub struct RequestUnstake<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
-    #[account(
-        mut,
-        seeds = [b"staking", user.key().as_ref()],
-        bump = staking_info.bump
-    )]
-    pub staking_info: Account<'info, StakingInfo>,
+    #[account(seeds = [b"yield-config"], bump = yield_config.bump)]
+    pub yield_config: Account<'info, YieldConfig>,
+
+    #[account(mut, seeds = [b"holder", user.key().as_ref()], bump = holder_info.bump)]
+    pub holder_info: Account<'info, HolderInfo>,
 
     #[account(
         init,
         payer = user,
-        space = 8 + 32 + 8 + 8 + 8 + 1 + 1 + 1,
+        space = 8 + 32 + 8 * 3 + 1 * 3,
         seeds = [b"unstaking", user.key().as_ref()],
         bump
     )]
@@ -912,11 +868,17 @@ pub struct CompleteUnstake<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
-    #[account(mut)]
-    pub user_token_ata: Account<'info, TokenAccount>,
+    #[account(seeds = [b"launchpad"], bump = launchpad_state.bump)]
+    pub launchpad_state: Account<'info, LaunchpadState>,
 
     #[account(mut)]
-    pub staking_vault: Account<'info, TokenAccount>,
+    pub user_usdc_ata: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub usdc_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: Vault PDA authority
+    pub vault_pda: UncheckedAccount<'info>,
 
     #[account(
         mut,
@@ -934,11 +896,17 @@ pub struct EmergencyRedeemDefi<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
-    #[account(mut)]
-    pub user_token_ata: Account<'info, TokenAccount>,
+    #[account(seeds = [b"launchpad"], bump = launchpad_state.bump)]
+    pub launchpad_state: Account<'info, LaunchpadState>,
 
     #[account(mut)]
-    pub staking_vault: Account<'info, TokenAccount>,
+    pub user_usdc_ata: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub usdc_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: Vault PDA authority
+    pub vault_pda: UncheckedAccount<'info>,
 
     #[account(
         mut,
@@ -952,97 +920,88 @@ pub struct EmergencyRedeemDefi<'info> {
 }
 
 #[derive(Accounts)]
-pub struct CreateYieldSnapshot<'info> {
+pub struct ProposeMorphoPool<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
+
+    #[account(seeds = [b"launchpad"], bump = launchpad_state.bump)]
+    pub launchpad_state: Account<'info, LaunchpadState>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + 32 + 64 + 1 + 8 * 3 + 1 * 2 + 8,
+        seeds = [b"morpho-pool", pool_address.key().as_ref()],
+        bump
+    )]
+    pub morpho_pool: Account<'info, MorphoPool>,
+
+    /// CHECK: The Morpho pool contract address
+    pub pool_address: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ApproveMorphoPool<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [b"launchpad"], bump = launchpad_state.bump)]
+    pub launchpad_state: Account<'info, LaunchpadState>,
+
+    #[account(mut)]
+    pub morpho_pool: Account<'info, MorphoPool>,
+}
+
+#[derive(Accounts)]
+pub struct InvestInMorpho<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(seeds = [b"launchpad"], bump = launchpad_state.bump)]
+    pub launchpad_state: Account<'info, LaunchpadState>,
+
+    #[account(mut, seeds = [b"treasury-vault"], bump = treasury_vault.bump)]
+    pub treasury_vault: Account<'info, TreasuryVault>,
+
+    #[account(seeds = [b"revenue-dist"], bump = revenue_distribution.bump)]
+    pub revenue_distribution: Account<'info, RevenueDistribution>,
 
     #[account(mut, seeds = [b"yield-config"], bump = yield_config.bump)]
     pub yield_config: Account<'info, YieldConfig>,
 
     #[account(mut)]
-    pub tax_vault: Account<'info, TokenAccount>,
-
-    #[account(
-        init,
-        payer = authority,
-        space = 8 + 8 * 2 + 8 + 1 + 1,
-        seeds = [b"yield-snapshot".as_ref(), &Clock::get()?.unix_timestamp.to_le_bytes()],
-        bump
-    )]
-    pub yield_snapshot: Account<'info, YieldSnapshot>,
+    pub morpho_pool: Account<'info, MorphoPool>,
 
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-pub struct ClaimYield<'info> {
-    #[account(mut)]
-    pub user: Signer<'info>,
-
-    #[account(mut)]
-    pub user_usdc_ata: Account<'info, TokenAccount>,
-
-    #[account(mut)]
-    pub tax_vault: Account<'info, TokenAccount>,
-
-    #[account(
-        mut,
-        seeds = [b"staking", user.key().as_ref()],
-        bump = staking_info.bump
-    )]
-    pub staking_info: Account<'info, StakingInfo>,
-
-    pub yield_snapshot: Account<'info, YieldSnapshot>,
-
-    pub token_program: Program<'info, Token>,
-}
-
-#[derive(Accounts)]
-pub struct SetTier2Whitelist<'info> {
+pub struct ReportMorphoYield<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
-    /// CHECK: Target user to whitelist
-    pub target_user: UncheckedAccount<'info>,
-
-    #[account(
-        init,
-        payer = authority,
-        space = 8 + 32 + 1 + 8 + 32 + 1,
-        seeds = [b"whitelist", target_user.key().as_ref()],
-        bump
-    )]
-    pub tier2_whitelist: Account<'info, Tier2Whitelist>,
-
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-pub struct InvestInRwa<'info> {
-    #[account(mut)]
-    pub authority: Signer<'info>,
+    #[account(seeds = [b"launchpad"], bump = launchpad_state.bump)]
+    pub launchpad_state: Account<'info, LaunchpadState>,
 
     #[account(mut, seeds = [b"treasury-vault"], bump = treasury_vault.bump)]
     pub treasury_vault: Account<'info, TreasuryVault>,
 
     #[account(mut, seeds = [b"yield-config"], bump = yield_config.bump)]
     pub yield_config: Account<'info, YieldConfig>,
-
-    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-pub struct ClaimRwaYields<'info> {
+pub struct UpdateRevenueSplit<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
-    #[account(mut, seeds = [b"treasury-vault"], bump = treasury_vault.bump)]
-    pub treasury_vault: Account<'info, TreasuryVault>,
+    #[account(seeds = [b"launchpad"], bump = launchpad_state.bump)]
+    pub launchpad_state: Account<'info, LaunchpadState>,
 
-    #[account(mut, seeds = [b"yield-config"], bump = yield_config.bump)]
-    pub yield_config: Account<'info, YieldConfig>,
-
-    pub system_program: Program<'info, System>,
+    #[account(mut, seeds = [b"revenue-dist"], bump = revenue_distribution.bump)]
+    pub revenue_distribution: Account<'info, RevenueDistribution>,
 }
 
 #[derive(Accounts)]
@@ -1055,39 +1014,20 @@ pub struct DistributeRevenue<'info> {
 
     #[account(seeds = [b"revenue-dist"], bump = revenue_distribution.bump)]
     pub revenue_distribution: Account<'info, RevenueDistribution>,
-
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-pub struct UpdateAllocationPercentages<'info> {
-    #[account(mut)]
-    pub authority: Signer<'info>,
-
-    #[account(mut, seeds = [b"revenue-dist"], bump = revenue_distribution.bump)]
-    pub revenue_distribution: Account<'info, RevenueDistribution>,
-
-    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct PauseLaunchpad<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
-
     #[account(mut, seeds = [b"launchpad"], bump = launchpad_state.bump)]
     pub launchpad_state: Account<'info, LaunchpadState>,
-
-    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct ResumeLaunchpad<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
-
     #[account(mut, seeds = [b"launchpad"], bump = launchpad_state.bump)]
     pub launchpad_state: Account<'info, LaunchpadState>,
-
-    pub system_program: Program<'info, System>,
 }

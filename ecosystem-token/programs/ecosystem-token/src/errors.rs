@@ -2,62 +2,74 @@ use anchor_lang::prelude::*;
 
 #[error_code]
 pub enum EcosystemError {
-    // ── Minting ────────────────────────────────────────────────────────────
+    // ── Launchpad ──────────────────────────────────────────────────────────
     #[msg("Launchpad is paused")]
     LaunchpadPaused,
     #[msg("Insufficient USDC balance")]
     InsufficientUsdc,
-    #[msg("Tier 2 tokens cannot be redeemed directly — use unstake")]
+    #[msg("Tier 2 tokens must complete the unstake flow before burning")]
     CannotRedeemTier2,
-    #[msg("Invalid redeem amount")]
+    #[msg("Invalid amount — must be greater than zero")]
     InvalidRedeemAmount,
 
-    // ── Staking ────────────────────────────────────────────────────────────
-    #[msg("Insufficient token balance")]
-    InsufficientTokens,
-    #[msg("No tokens staked")]
-    NoStakedTokens,
-    #[msg("Vesting period is still active — tokens are locked")]
-    VestingLocked,
-    #[msg("Cannot transfer locked Tier 2 tokens during vesting")]
-    CannotTransferLocked,
+    // ── Yield / Holders ────────────────────────────────────────────────────
+    #[msg("No yield available to claim")]
+    NoYieldToClaim,
+    #[msg("Yield snapshot not ready for distribution")]
+    YieldSnapshotNotReady,
+    #[msg("Snapshot frequency not met")]
+    SnapshotFrequencyNotMet,
+    #[msg("Insufficient yield in treasury")]
+    InsufficientYield,
 
-    // ── Unstaking / RWA redemption ─────────────────────────────────────────
-    #[msg("Unstake request already pending for this user")]
-    UnstakeAlreadyPending,
-    #[msg("48 business hours have not elapsed yet — funds are still in RUSDY")]
+    // ── Unstaking ─────────────────────────────────────────────────────────
+    #[msg("48 business hours have not elapsed — funds still routing from Morpho to USDC")]
     UnstakeCooldownNotMet,
     #[msg("Unstake request already completed")]
     UnstakeAlreadyCompleted,
     #[msg("No pending unstake request found")]
     NoUnstakeRequest,
+    #[msg("Unstake request already pending")]
+    UnstakeAlreadyPending,
 
-    // ── RWA / RUSDY ────────────────────────────────────────────────────────
-    #[msg("RUSDY investment amount must be greater than zero")]
-    InvalidRwaAmount,
-    #[msg("Insufficient treasury balance for RWA investment")]
+    // ── Morpho Investment ─────────────────────────────────────────────────
+    #[msg("Investment blocked — waiting for admin approval of Morpho pool")]
+    InvestmentPendingApproval,
+    #[msg("Morpho pool type is not eligible (must be Isolated, Fixed-Collateral, or Cash-Backed)")]
+    IneligiblePoolType,
+    #[msg("Morpho pool not yet approved by admin")]
+    PoolNotApproved,
+    #[msg("Morpho pool is not currently active")]
+    PoolNotActive,
+    #[msg("Insufficient treasury balance for investment")]
     InsufficientTreasury,
-    #[msg("No RWA yield available to claim")]
-    NoRwaYield,
+    #[msg("No Morpho yield available to claim")]
+    NoMorphoYield,
+    #[msg("Invalid investment amount")]
+    InvalidInvestmentAmount,
 
-    // ── Yield / Snapshot ───────────────────────────────────────────────────
-    #[msg("Snapshot frequency not met")]
-    SnapshotFrequencyNotMet,
-    #[msg("Yield snapshot not ready for distribution")]
-    YieldSnapshotNotReady,
-    #[msg("No yield available to claim")]
-    NoYieldToClaim,
-    #[msg("Insufficient yield balance")]
-    InsufficientYield,
+    // ── Revenue Distribution ───────────────────────────────────────────────
+    #[msg("Revenue distribution shares must sum to 10000 basis points")]
+    InvalidDistributionShares,
+    #[msg("Investment ratio must be between 0 and 10000 basis points")]
+    InvalidInvestmentRatio,
 
-    // ── Distribution ───────────────────────────────────────────────────────
-    #[msg("Distribution percentages must sum to 100")]
-    InvalidDistributionPercentages,
+    // ── Vesting ───────────────────────────────────────────────────────────
+    #[msg("Tokens are locked during the vesting period")]
+    VestingLocked,
+    #[msg("Cannot transfer locked Tier 2 tokens")]
+    CannotTransferLocked,
 
-    // ── General ────────────────────────────────────────────────────────────
-    #[msg("Math overflow")]
+    // ── Tokens ────────────────────────────────────────────────────────────
+    #[msg("Insufficient token balance")]
+    InsufficientTokens,
+    #[msg("No tokens to operate on")]
+    NoStakedTokens,
+
+    // ── General ───────────────────────────────────────────────────────────
+    #[msg("Arithmetic overflow — operation rejected for safety")]
     MathOverflow,
-    #[msg("Unauthorized")]
+    #[msg("Unauthorized — signer is not the program authority")]
     Unauthorized,
     #[msg("Invalid timestamp")]
     InvalidTimestamp,
