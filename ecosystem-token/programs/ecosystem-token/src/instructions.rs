@@ -4,7 +4,7 @@ use anchor_spl::{
     token::{mint_to, transfer, Burn, Mint, MintTo, Token, TokenAccount, Transfer},
 };
 
-use crate::errors::EcosystemError::*;
+use crate::errors::EcosystemError;
 use crate::morpho::*;
 use crate::state::*;
 

@@ -5,7 +5,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{transfer, Token, TokenAccount, Transfer};
 
-use crate::errors::EcosystemError::*;
+use crate::errors::EcosystemError;
 use crate::state::*;
 use crate::yield_strategy::*;
 
