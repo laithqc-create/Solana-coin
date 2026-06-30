@@ -107,21 +107,56 @@ jobs:
           # 1. Resolve full graph with modern cargo
           cargo generate-lockfile
 
-          # 2. Pin edition2024 packages to last bundled-cargo-safe versions
+          # 2. Pin edition2024 packages to last bundled-cargo-safe versions.
+          #
+          # Rule: bundled cargo (~1.75) can't parse ANY Cargo.toml with
+          # edition = "2024". Two categories of fix:
+          #
+          #   A) Package has a pre-edition2024 release → pin to that version.
+          #   B) Package ONLY has edition2024 releases (e.g. toml_parser) →
+          #      pin the PARENT that introduced it to a version that doesn't
+          #      depend on it at all.
+          #
+          # Known problematic packages (add new ones here as CI finds them):
+          #
+          #   indexmap  ≥ 2.14.0  → edition2024. Pin to 2.13.2          [A]
+          #   block-buffer ≥ 0.11 → edition2024. Pin to 0.10.4          [A]
+          #   digest    ≥ 0.11    → edition2024. Pin to 0.10.7          [A]
+          #   toml_parser (ALL)   → always edition2024 (new crate).
+          #     Fix: pin toml_edit to 0.21.1 — last version that uses   [B]
+          #     winnow directly (no toml_parser dep at all).
+          #   toml_datetime ≥ 0.6.11 → may be edition2024. Pin 0.6.8.  [A]
+          #   shlex ≥ 2.0         → edition2024. Pin to 1.3.0.          [A]
+          #
+          # All guarded with `|| echo` — if package isn't in graph or
+          # version doesn't satisfy other constraints, we skip and continue.
           echo "Pinning edition2024 transitive deps..."
-          cargo update -p indexmap      --precise 2.13.2 || echo "indexmap not in graph, skipping"
-          cargo update -p block-buffer  --precise 0.10.4 || echo "block-buffer not in graph, skipping"
-          cargo update -p digest        --precise 0.10.7 || echo "digest not in graph, skipping"
+
+          # Category A — direct version pins
+          cargo update -p indexmap      --precise 2.13.2 || echo "indexmap: skipped"
+          cargo update -p block-buffer  --precise 0.10.4 || echo "block-buffer: skipped"
+          cargo update -p digest        --precise 0.10.7 || echo "digest: skipped"
+          cargo update -p toml_datetime --precise 0.6.8  || echo "toml_datetime: skipped"
+          cargo update -p shlex         --precise 1.3.0  || echo "shlex: skipped"
+
+          # Category B — parent pins to eliminate edition2024-only crates
+          # toml_parser has no pre-edition2024 version; pin its parent toml_edit
+          # to 0.21.1 (uses winnow directly, toml_parser never enters graph).
+          # Also pin toml to 0.8.12 which uses toml_edit 0.21.x.
+          cargo update -p toml_edit     --precise 0.21.1 || echo "toml_edit: skipped"
+          cargo update -p toml          --precise 0.8.12 || echo "toml: skipped"
+
+          echo "All pins applied."
 
           # 3. Downgrade lockfile format v4 → v3
           sed -i 's/^version = 4$/version = 3/' Cargo.lock
 
           echo "✅ Cargo.lock ready (format v3, edition2024 deps pinned)"
           head -4 Cargo.lock
-          echo "--- Pinned versions ---"
-          grep -A2 'name = "indexmap"' Cargo.lock | head -4
-          grep -A2 'name = "block-buffer"' Cargo.lock | head -4 || true
-          grep -A2 'name = "digest"' Cargo.lock | head -4 || true
+          echo "--- Key pinned versions in lockfile ---"
+          grep -A2 'name = "indexmap"' Cargo.lock | head -3
+          grep -A2 'name = "toml_edit"' Cargo.lock | head -3 || true
+          grep -A2 'name = "toml_parser"' Cargo.lock | head -3 || echo "(toml_parser not in graph ✅)"
 
       # ── Build SBF ─────────────────────────────────────────────────────────
       - name: Build smart contract (anchor build → SBF bytecode)
@@ -290,9 +325,13 @@ jobs:
             ecosystem-token/programs/ecosystem-token/src/lib.rs
           cd ecosystem-token
           cargo generate-lockfile
-          cargo update -p indexmap      --precise 2.13.2 || echo "indexmap not in graph"
-          cargo update -p block-buffer  --precise 0.10.4 || echo "block-buffer not in graph"
-          cargo update -p digest        --precise 0.10.7 || echo "digest not in graph"
+          cargo update -p indexmap      --precise 2.13.2 || echo "indexmap: skipped"
+          cargo update -p block-buffer  --precise 0.10.4 || echo "block-buffer: skipped"
+          cargo update -p digest        --precise 0.10.7 || echo "digest: skipped"
+          cargo update -p toml_datetime --precise 0.6.8  || echo "toml_datetime: skipped"
+          cargo update -p shlex         --precise 1.3.0  || echo "shlex: skipped"
+          cargo update -p toml_edit     --precise 0.21.1 || echo "toml_edit: skipped"
+          cargo update -p toml          --precise 0.8.12 || echo "toml: skipped"
           sed -i 's/^version = 4$/version = 3/' Cargo.lock
           anchor build
 
