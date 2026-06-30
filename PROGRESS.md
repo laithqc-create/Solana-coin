@@ -68,6 +68,17 @@ Solana Program (on-chain)
 
 ---
 
+## 🔧 CI DEBUGGING LOG (Session 9, post-push)
+
+| # | Error | Root Cause | Fix | Commit |
+|---|-------|-----------|-----|--------|
+| 1 | `feature 'edition2024' is required` | `block-buffer 0.12.1`/`digest 0.11.3` need Rust ≥1.85.0; pinned 1.75.0 | Bumped `RUST_TOOLCHAIN` to `1.85.0` | `377c0b2` |
+| 2 | `E0433: could not find ErrorCode in $crate` (×30 sites) | Anchor's `require!(cond, Variant)` shorthand hardcodes `crate::ErrorCode::Variant` — ignores `use EcosystemError::*` glob import since our enum isn't named `ErrorCode` | Replaced all bare-ident `require!` calls with explicit `EcosystemError::Variant` paths in `instructions.rs` + `investment_instructions.rs` | `cdd9997` |
+
+**Status:** Awaiting next CI run result. If new errors appear, paste here.
+
+---
+
 ## 🔴 CURRENT BLOCKERS (in order)
 
 ### BLOCKER 1: Program ID + GitHub Secrets (YOU DO THIS)
