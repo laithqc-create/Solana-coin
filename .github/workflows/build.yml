@@ -83,6 +83,22 @@ jobs:
             ecosystem-token/programs/ecosystem-token/src/lib.rs
           echo "✅ Program ID set to: $PROGRAM_ID"
 
+      # ── Lockfile compatibility ───────────────────────────────────────────────
+      # Solana's bundled platform-tools cargo (used internally by cargo-build-sbf)
+      # is older than our rustup toolchain and cannot parse Cargo.lock format v4
+      # (the default since Cargo 1.78+). We generate the lock with our modern
+      # toolchain (needed to resolve edition2024 transitive deps), then downgrade
+      # the lockfile format field to v3 for compatibility. Safe because all our
+      # dependencies are version-pinned crates.io packages (no git sources, which
+      # are the only deps whose v3/v4 representation actually differs).
+      - name: Generate Cargo.lock (v3-compatible for Solana toolchain)
+        working-directory: ./ecosystem-token
+        run: |
+          cargo generate-lockfile
+          sed -i 's/^version = 4$/version = 3/' Cargo.lock
+          echo "✅ Cargo.lock generated, forced to format v3"
+          head -5 Cargo.lock
+
       # ── Build SBF ─────────────────────────────────────────────────────────
       - name: Build smart contract (anchor build → SBF bytecode)
         working-directory: ./ecosystem-token
@@ -248,7 +264,10 @@ jobs:
         run: |
           sed -i "s/declare_id!(\".*\")/declare_id!(\"${{ secrets.PROGRAM_ID }}\")/" \
             ecosystem-token/programs/ecosystem-token/src/lib.rs
-          cd ecosystem-token && anchor build
+          cd ecosystem-token
+          cargo generate-lockfile
+          sed -i 's/^version = 4$/version = 3/' Cargo.lock
+          anchor build
 
       - name: Deploy to devnet
         if: steps.prereq.outputs.skip == 'false'
