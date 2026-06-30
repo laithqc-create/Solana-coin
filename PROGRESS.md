@@ -75,6 +75,7 @@ Solana Program (on-chain)
 | 1 | `feature 'edition2024' is required` | `block-buffer 0.12.1`/`digest 0.11.3` need Rust ≥1.85.0; pinned 1.75.0 | Bumped `RUST_TOOLCHAIN` to `1.85.0` | `377c0b2` |
 | 2 | `E0433: could not find ErrorCode in $crate` (×30 sites) | Anchor's `require!(cond, Variant)` shorthand hardcodes `crate::ErrorCode::Variant` — ignores `use EcosystemError::*` glob import since our enum isn't named `ErrorCode` | Replaced all bare-ident `require!` calls with explicit `EcosystemError::Variant` paths in `instructions.rs` + `investment_instructions.rs` | `cdd9997` |
 | 3 | `E0433: use of undeclared type EcosystemError` (×10 sites) | `use crate::errors::EcosystemError::*;` globs in variants only, not the type itself — broke once require! calls needed the bare type name | Changed to `use crate::errors::EcosystemError;` (type import, matches `crate::EcosystemError` re-export in lib.rs) in both files | `f74b675` |
+| 4 | 3 unit test failures in `morpho.rs` (off by 10x) | Test assertions hardcoded wrong expected values — production fee math (`LAUNCHPAD_FEE_BPS=10`/0.1%, `STANDARD_FEE_BPS=50`/0.5%) was correct; tests expected results 10x too small (decimal point error) | Corrected test expected values: 1,000 not 100 / 5,000 not 500 / 10,000 not 1,000. No production logic changed | `9747eac` |
 
 **Status:** Awaiting next CI run result. If new errors appear, paste here.
 
