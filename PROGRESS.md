@@ -74,6 +74,7 @@ Solana Program (on-chain)
 |---|-------|-----------|-----|--------|
 | 1 | `feature 'edition2024' is required` | `block-buffer 0.12.1`/`digest 0.11.3` need Rust ≥1.85.0; pinned 1.75.0 | Bumped `RUST_TOOLCHAIN` to `1.85.0` | `377c0b2` |
 | 2 | `E0433: could not find ErrorCode in $crate` (×30 sites) | Anchor's `require!(cond, Variant)` shorthand hardcodes `crate::ErrorCode::Variant` — ignores `use EcosystemError::*` glob import since our enum isn't named `ErrorCode` | Replaced all bare-ident `require!` calls with explicit `EcosystemError::Variant` paths in `instructions.rs` + `investment_instructions.rs` | `cdd9997` |
+| 3 | `E0433: use of undeclared type EcosystemError` (×10 sites) | `use crate::errors::EcosystemError::*;` globs in variants only, not the type itself — broke once require! calls needed the bare type name | Changed to `use crate::errors::EcosystemError;` (type import, matches `crate::EcosystemError` re-export in lib.rs) in both files | `f74b675` |
 
 **Status:** Awaiting next CI run result. If new errors appear, paste here.
 
