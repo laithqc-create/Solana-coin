@@ -43,11 +43,16 @@ pub fn invest_usdc_to_susds(ctx: Context<InvestUsdcToSusds>) -> Result<()> {
     );
 
     let pool = &mut ctx.accounts.pool_state;
-    require!(pool.liquid_usdc > 0, InsufficientTreasury);
+    require!(pool.liquid_usdc > 0,
+        EcosystemError::InsufficientTreasury
+    );
 
     // Split 80% invest / 20% liquid
     let (invest_amount, liquid_amount) = split_investment(pool.total_usdc)?;
-    require!(invest_amount > 0, InvalidInvestmentAmount);
+    require!(
+        invest_amount > 0,
+        EcosystemError::InvalidInvestmentAmount
+    );
 
     // Lock funds — move from liquid to invested bucket
     pool.liquid_usdc   = liquid_amount;
@@ -135,7 +140,8 @@ pub fn report_sky_yield(
 /// Keeper will unstake sUSDS → USDS → bridge → USDC.
 pub fn withdraw_from_susds(ctx: Context<KeeperReportSky>) -> Result<()> {
     let pos = &mut ctx.accounts.sky_position;
-    require!(pos.status == StrategyStatus::Active, YieldStrategyError::InvalidStrategyStatus);
+    require!(
+        pos.status == StrategyStatus::Active, YieldStrategyError::InvalidStrategyStatus);
 
     pos.status = StrategyStatus::PendingWithdrawal;
 
@@ -180,10 +186,15 @@ pub fn invest_usdt_to_susde(ctx: Context<InvestUsdtToSusde>) -> Result<()> {
     );
 
     let pool = &mut ctx.accounts.pool_state;
-    require!(pool.liquid_usdt > 0, InsufficientTreasury);
+    require!(pool.liquid_usdt > 0,
+        EcosystemError::InsufficientTreasury
+    );
 
     let (invest_amount, liquid_amount) = split_investment(pool.total_usdt)?;
-    require!(invest_amount > 0, InvalidInvestmentAmount);
+    require!(
+        invest_amount > 0,
+        EcosystemError::InvalidInvestmentAmount
+    );
 
     pool.liquid_usdt   = liquid_amount;
     pool.invested_usdt = invest_amount;

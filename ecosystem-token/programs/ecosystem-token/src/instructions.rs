@@ -96,8 +96,14 @@ pub fn mint_tokens(
     usdc_amount: u64,
     is_campaign: bool,
 ) -> Result<()> {
-    require!(!ctx.accounts.launchpad_state.paused, LaunchpadPaused);
-    require!(usdc_amount > 0, InsufficientUsdc);
+    require!(
+        !ctx.accounts.launchpad_state.paused,
+        EcosystemError::LaunchpadPaused
+    );
+    require!(
+        usdc_amount > 0,
+        EcosystemError::InsufficientUsdc
+    );
 
     let now = Clock::get()?.unix_timestamp;
     let launchpad = &mut ctx.accounts.launchpad_state;
@@ -207,8 +213,14 @@ pub fn mint_tokens(
 /// Price NEVER changes regardless of external market.
 /// Fee tiers same as mint. All fees → 100% protocol treasury.
 pub fn burn_tokens(ctx: Context<BurnTokens>, token_amount: u64) -> Result<()> {
-    require!(!ctx.accounts.launchpad_state.paused, LaunchpadPaused);
-    require!(token_amount > 0, InvalidRedeemAmount);
+    require!(
+        !ctx.accounts.launchpad_state.paused,
+        EcosystemError::LaunchpadPaused
+    );
+    require!(
+        token_amount > 0,
+        EcosystemError::InvalidRedeemAmount
+    );
 
     let now = Clock::get()?.unix_timestamp;
     let launchpad = &ctx.accounts.launchpad_state;
@@ -225,7 +237,10 @@ pub fn burn_tokens(ctx: Context<BurnTokens>, token_amount: u64) -> Result<()> {
 
     // ── Fee calculation ───────────────────────────────────────────────
     let holder = &mut ctx.accounts.holder_info;
-    require!(holder.token_balance >= token_amount, InsufficientTokens);
+    require!(
+        holder.token_balance >= token_amount,
+        EcosystemError::InsufficientTokens
+    );
 
     let fee_result = calculate_fee(
         token_amount,
@@ -323,7 +338,10 @@ pub fn claim_yield(ctx: Context<ClaimYield>) -> Result<()> {
         holder.token_balance,
     );
     let total_claimable = holder.unclaimed_yield.saturating_add(new_yield);
-    require!(total_claimable > 0, NoYieldToClaim);
+    require!(
+        total_claimable > 0,
+        EcosystemError::NoYieldToClaim
+    );
 
     // Reset holder snapshot
     holder.yield_index_snapshot = yc.global_yield_index;
@@ -361,10 +379,16 @@ pub fn claim_yield(ctx: Context<ClaimYield>) -> Result<()> {
 /// Step 1: Request to exit. Starts 48 business-hour countdown.
 /// During this period, Morpho position unwinds and USDC is routed back.
 pub fn request_unstake(ctx: Context<RequestUnstake>, amount: u64) -> Result<()> {
-    require!(amount > 0, InsufficientTokens);
+    require!(
+        amount > 0,
+        EcosystemError::InsufficientTokens
+    );
 
     let holder = &mut ctx.accounts.holder_info;
-    require!(holder.token_balance >= amount, InsufficientTokens);
+    require!(
+        holder.token_balance >= amount,
+        EcosystemError::InsufficientTokens
+    );
 
     let now = Clock::get()?.unix_timestamp;
 
@@ -401,12 +425,21 @@ pub fn request_unstake(ctx: Context<RequestUnstake>, amount: u64) -> Result<()> 
 /// Step 2: Complete after 48 business hours. Weekends excluded from timer.
 pub fn complete_unstake(ctx: Context<CompleteUnstake>) -> Result<()> {
     let request = &mut ctx.accounts.unstaking_request;
-    require!(!request.completed, UnstakeAlreadyCompleted);
-    require!(!request.emergency_redeemed, UnstakeAlreadyCompleted);
+    require!(
+        !request.completed,
+        EcosystemError::UnstakeAlreadyCompleted
+    );
+    require!(
+        !request.emergency_redeemed,
+        EcosystemError::UnstakeAlreadyCompleted
+    );
 
     let now = Clock::get()?.unix_timestamp;
     let elapsed = crate::rwa::business_seconds_elapsed(request.requested_at, now);
-    require!(elapsed >= crate::rwa::UNSTAKE_BUSINESS_SECONDS, UnstakeCooldownNotMet);
+    require!(
+        elapsed >= crate::rwa::UNSTAKE_BUSINESS_SECONDS,
+        EcosystemError::UnstakeCooldownNotMet
+    );
 
     request.completed = true;
 
@@ -432,8 +465,14 @@ pub fn complete_unstake(ctx: Context<CompleteUnstake>) -> Result<()> {
 /// Emergency exit: immediate but exposes user to AMM slippage.
 pub fn emergency_redeem_defi(ctx: Context<EmergencyRedeemDefi>) -> Result<()> {
     let request = &mut ctx.accounts.unstaking_request;
-    require!(!request.completed, UnstakeAlreadyCompleted);
-    require!(!request.emergency_redeemed, UnstakeAlreadyCompleted);
+    require!(
+        !request.completed,
+        EcosystemError::UnstakeAlreadyCompleted
+    );
+    require!(
+        !request.emergency_redeemed,
+        EcosystemError::UnstakeAlreadyCompleted
+    );
 
     request.emergency_redeemed = true;
     request.completed = true;
@@ -476,9 +515,12 @@ pub fn propose_morpho_pool(
 ) -> Result<()> {
     require!(
         ctx.accounts.launchpad_state.authority == ctx.accounts.authority.key(),
-        Unauthorized
+        EcosystemError::Unauthorized
     );
-    require!(is_eligible_pool_type(&pool_type), IneligiblePoolType);
+    require!(
+        is_eligible_pool_type(&pool_type),
+        EcosystemError::IneligiblePoolType
+    );
 
     let pool = &mut ctx.accounts.morpho_pool;
     pool.pool_address = ctx.accounts.pool_address.key();
@@ -499,11 +541,14 @@ pub fn propose_morpho_pool(
 pub fn approve_morpho_pool(ctx: Context<ApproveMorphoPool>) -> Result<()> {
     require!(
         ctx.accounts.launchpad_state.authority == ctx.accounts.authority.key(),
-        Unauthorized
+        EcosystemError::Unauthorized
     );
 
     let pool = &mut ctx.accounts.morpho_pool;
-    require!(is_eligible_pool_type(&pool.pool_type), IneligiblePoolType);
+    require!(
+        is_eligible_pool_type(&pool.pool_type),
+        EcosystemError::IneligiblePoolType
+    );
 
     pool.approved = true;
     pool.is_active = true;
@@ -521,18 +566,33 @@ pub fn approve_morpho_pool(ctx: Context<ApproveMorphoPool>) -> Result<()> {
 pub fn invest_in_morpho(ctx: Context<InvestInMorpho>, amount: u64) -> Result<()> {
     require!(
         !ctx.accounts.launchpad_state.investment_pending_approval,
-        InvestmentPendingApproval
+        EcosystemError::InvestmentPendingApproval
     );
-    require!(ctx.accounts.morpho_pool.approved, PoolNotApproved);
-    require!(ctx.accounts.morpho_pool.is_active, PoolNotActive);
-    require!(amount > 0, InvalidInvestmentAmount);
+    require!(
+        ctx.accounts.morpho_pool.approved,
+        EcosystemError::PoolNotApproved
+    );
+    require!(
+        ctx.accounts.morpho_pool.is_active,
+        EcosystemError::PoolNotActive
+    );
+    require!(
+        amount > 0,
+        EcosystemError::InvalidInvestmentAmount
+    );
 
     let treasury = &mut ctx.accounts.treasury_vault;
-    require!(treasury.liquid_usdc >= amount, InsufficientTreasury);
+    require!(
+        treasury.liquid_usdc >= amount,
+        EcosystemError::InsufficientTreasury
+    );
 
     let dist = &ctx.accounts.revenue_distribution;
     let max_investable = calculate_investment_amount(treasury.total_usdc, dist.investment_ratio_bps);
-    require!(amount <= max_investable, InvalidInvestmentAmount);
+    require!(
+        amount <= max_investable,
+        EcosystemError::InvalidInvestmentAmount
+    );
 
     treasury.liquid_usdc = treasury.liquid_usdc.saturating_sub(amount);
     treasury.morpho_balance = treasury.morpho_balance.saturating_add(amount);
@@ -555,9 +615,12 @@ pub fn invest_in_morpho(ctx: Context<InvestInMorpho>, amount: u64) -> Result<()>
 pub fn report_morpho_yield(ctx: Context<ReportMorphoYield>, yield_amount: u64) -> Result<()> {
     require!(
         ctx.accounts.launchpad_state.authority == ctx.accounts.authority.key(),
-        Unauthorized
+        EcosystemError::Unauthorized
     );
-    require!(yield_amount > 0, NoMorphoYield);
+    require!(
+        yield_amount > 0,
+        EcosystemError::NoMorphoYield
+    );
 
     let treasury = &mut ctx.accounts.treasury_vault;
     treasury.morpho_yield_earned = treasury.morpho_yield_earned.saturating_add(yield_amount);
@@ -587,15 +650,15 @@ pub fn update_revenue_split(
 ) -> Result<()> {
     require!(
         ctx.accounts.launchpad_state.authority == ctx.accounts.authority.key(),
-        Unauthorized
+        EcosystemError::Unauthorized
     );
     require!(
         holder_bps + marketing_bps + asset_manager_bps + protocol_bps == 10_000,
-        InvalidDistributionShares
+        EcosystemError::InvalidDistributionShares
     );
     require!(
         investment_ratio_bps <= 10_000,
-        InvalidInvestmentRatio
+        EcosystemError::InvalidInvestmentRatio
     );
 
     let dist = &mut ctx.accounts.revenue_distribution;
@@ -618,7 +681,7 @@ pub fn distribute_revenue(ctx: Context<DistributeRevenue>) -> Result<()> {
     let treasury = &mut ctx.accounts.treasury_vault;
     require!(
         treasury.total_yields_earned > treasury.total_yields_distributed,
-        InsufficientYield
+        EcosystemError::InsufficientYield
     );
 
     let distributable = treasury.total_yields_earned
@@ -645,7 +708,7 @@ pub fn distribute_revenue(ctx: Context<DistributeRevenue>) -> Result<()> {
 pub fn pause_launchpad(ctx: Context<PauseLaunchpad>) -> Result<()> {
     require!(
         ctx.accounts.launchpad_state.authority == ctx.accounts.authority.key(),
-        Unauthorized
+        EcosystemError::Unauthorized
     );
     ctx.accounts.launchpad_state.paused = true;
     msg!("Launchpad PAUSED by authority.");
@@ -656,7 +719,7 @@ pub fn pause_launchpad(ctx: Context<PauseLaunchpad>) -> Result<()> {
 pub fn resume_launchpad(ctx: Context<ResumeLaunchpad>) -> Result<()> {
     require!(
         ctx.accounts.launchpad_state.authority == ctx.accounts.authority.key(),
-        Unauthorized
+        EcosystemError::Unauthorized
     );
     ctx.accounts.launchpad_state.paused = false;
     msg!("Launchpad RESUMED by authority.");
