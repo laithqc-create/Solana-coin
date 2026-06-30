@@ -228,7 +228,7 @@ mod tests {
     fn test_launchpad_fee_within_purchase() {
         // Launchpad investor, amount ≤ original: 0.1% fee
         let result = calculate_fee(1_000_000, true, 2_000_000);
-        assert_eq!(result.total_fee, 100); // 0.1% of 1_000_000
+        assert_eq!(result.total_fee, 1_000); // 0.1% of 1_000_000 = 1_000
         assert_eq!(result.excess_portion_fee, 0);
     }
 
@@ -236,8 +236,8 @@ mod tests {
     fn test_launchpad_fee_excess() {
         // Launchpad investor, amount > original: split fee
         let result = calculate_fee(3_000_000, true, 1_000_000);
-        let expected_launchpad = 100; // 0.1% of 1_000_000
-        let expected_excess = 1_000; // 0.5% of 2_000_000
+        let expected_launchpad = 1_000;  // 0.1% of 1_000_000
+        let expected_excess = 10_000;    // 0.5% of 2_000_000 (excess = 3M - 1M)
         assert_eq!(result.launchpad_portion_fee, expected_launchpad);
         assert_eq!(result.excess_portion_fee, expected_excess);
         assert_eq!(result.total_fee, expected_launchpad + expected_excess);
@@ -247,7 +247,7 @@ mod tests {
     fn test_standard_fee() {
         // Non-launchpad: always 0.5%
         let result = calculate_fee(1_000_000, false, 0);
-        assert_eq!(result.total_fee, 500); // 0.5% of 1_000_000
+        assert_eq!(result.total_fee, 5_000); // 0.5% of 1_000_000 = 5_000
     }
 
     #[test]
