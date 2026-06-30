@@ -83,21 +83,45 @@ jobs:
             ecosystem-token/programs/ecosystem-token/src/lib.rs
           echo "✅ Program ID set to: $PROGRAM_ID"
 
-      # ── Lockfile compatibility ───────────────────────────────────────────────
-      # Solana's bundled platform-tools cargo (used internally by cargo-build-sbf)
-      # is older than our rustup toolchain and cannot parse Cargo.lock format v4
-      # (the default since Cargo 1.78+). We generate the lock with our modern
-      # toolchain (needed to resolve edition2024 transitive deps), then downgrade
-      # the lockfile format field to v3 for compatibility. Safe because all our
-      # dependencies are version-pinned crates.io packages (no git sources, which
-      # are the only deps whose v3/v4 representation actually differs).
-      - name: Generate Cargo.lock (v3-compatible for Solana toolchain)
+      # ── Lockfile + edition2024 compatibility ─────────────────────────────────
+      # anchor build uses Solana's BUNDLED platform-tools cargo (~1.75) for the
+      # actual SBF compile. That bundled cargo cannot parse Cargo.toml manifests
+      # that declare `edition = "2024"` — it fails with:
+      #   "feature `edition2024` is required"
+      #
+      # Strategy:
+      #   1. Use modern system cargo (1.85) to fully resolve the dep graph.
+      #   2. Pin every known edition2024 package DOWN to its last non-edition2024
+      #      release via --precise so the bundled cargo only sees compatible manifests.
+      #   3. Downgrade lockfile format v4 → v3 (bundled cargo can't parse v4 either).
+      #
+      # Known edition2024 packages pinned:
+      #   indexmap     2.14.0 → 2.13.2  (edition2024 first appeared in 2.14.0)
+      #   block-buffer 0.12.1 → 0.10.4  (last version before edition2024 chain)
+      #   digest       0.11.3 → 0.10.7  (last version before edition2024 chain)
+      #
+      # `|| true` skips gracefully if a package isn't in the current dep graph.
+      - name: Generate Cargo.lock and pin edition2024 deps for bundled cargo
         working-directory: ./ecosystem-token
         run: |
+          # 1. Resolve full graph with modern cargo
           cargo generate-lockfile
+
+          # 2. Pin edition2024 packages to last bundled-cargo-safe versions
+          echo "Pinning edition2024 transitive deps..."
+          cargo update -p indexmap      --precise 2.13.2 || echo "indexmap not in graph, skipping"
+          cargo update -p block-buffer  --precise 0.10.4 || echo "block-buffer not in graph, skipping"
+          cargo update -p digest        --precise 0.10.7 || echo "digest not in graph, skipping"
+
+          # 3. Downgrade lockfile format v4 → v3
           sed -i 's/^version = 4$/version = 3/' Cargo.lock
-          echo "✅ Cargo.lock generated, forced to format v3"
-          head -5 Cargo.lock
+
+          echo "✅ Cargo.lock ready (format v3, edition2024 deps pinned)"
+          head -4 Cargo.lock
+          echo "--- Pinned versions ---"
+          grep -A2 'name = "indexmap"' Cargo.lock | head -4
+          grep -A2 'name = "block-buffer"' Cargo.lock | head -4 || true
+          grep -A2 'name = "digest"' Cargo.lock | head -4 || true
 
       # ── Build SBF ─────────────────────────────────────────────────────────
       - name: Build smart contract (anchor build → SBF bytecode)
@@ -259,13 +283,16 @@ jobs:
           fi
           echo "Final balance: $(solana balance)"
 
-      - name: Inject Program ID and build
+      - name: Inject Program ID, pin edition2024 deps, and build
         if: steps.prereq.outputs.skip == 'false'
         run: |
           sed -i "s/declare_id!(\".*\")/declare_id!(\"${{ secrets.PROGRAM_ID }}\")/" \
             ecosystem-token/programs/ecosystem-token/src/lib.rs
           cd ecosystem-token
           cargo generate-lockfile
+          cargo update -p indexmap      --precise 2.13.2 || echo "indexmap not in graph"
+          cargo update -p block-buffer  --precise 0.10.4 || echo "block-buffer not in graph"
+          cargo update -p digest        --precise 0.10.7 || echo "digest not in graph"
           sed -i 's/^version = 4$/version = 3/' Cargo.lock
           anchor build
 
