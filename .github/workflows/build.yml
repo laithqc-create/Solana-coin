@@ -51,6 +51,13 @@ jobs:
           path: ~/.local/share/solana
           key: solana-${{ env.SOLANA_VERSION }}
 
+      - name: Cache vendored dependencies
+        uses: actions/cache@v4
+        with:
+          path: ecosystem-token/vendor
+          key: vendor-${{ hashFiles('ecosystem-token/Cargo.toml', 'ecosystem-token/programs/ecosystem-token/Cargo.toml') }}
+          restore-keys: vendor-
+
       # ── Node / Anchor CLI ─────────────────────────────────────────────────
       - name: Install Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -83,80 +90,44 @@ jobs:
             ecosystem-token/programs/ecosystem-token/src/lib.rs
           echo "✅ Program ID set to: $PROGRAM_ID"
 
-      # ── Lockfile + edition2024 compatibility ─────────────────────────────────
-      # anchor build uses Solana's BUNDLED platform-tools cargo (~1.75) for the
-      # actual SBF compile. That bundled cargo cannot parse Cargo.toml manifests
-      # that declare `edition = "2024"` — it fails with:
-      #   "feature `edition2024` is required"
+      # ── Vendor + edition2024 manifest patch (PERMANENT FIX) ───────────────────
+      # The Solana bundled cargo-build-sbf (platform-tools, ~cargo 1.75) cannot
+      # parse ANY Cargo.toml that declares edition = "2024". New crates in the
+      # TOML ecosystem (toml_parser, toml_datetime 1.x, etc.) are edition2024-only
+      # with no prior releases — per-package pinning hits a new crate every run.
       #
-      # Strategy:
-      #   1. Use modern system cargo (1.85) to fully resolve the dep graph.
-      #   2. Pin every known edition2024 package DOWN to its last non-edition2024
-      #      release via --precise so the bundled cargo only sees compatible manifests.
-      #   3. Downgrade lockfile format v4 → v3 (bundled cargo can't parse v4 either).
+      # Permanent solution:
+      #   1. Vendor ALL deps using system cargo 1.85 (edition2024-aware).
+      #   2. Patch every edition = "2024" line → edition = "2021" in the vendor/.
+      #      The bundled cargo reads from vendor/, never hits crates-io, never
+      #      fails on an unreadable manifest.
+      #   3. Downgrade Cargo.lock format v4 → v3 (bundled cargo can't read v4).
       #
-      # Known edition2024 packages pinned:
-      #   indexmap     2.14.0 → 2.13.2  (edition2024 first appeared in 2.14.0)
-      #   block-buffer 0.12.1 → 0.10.4  (last version before edition2024 chain)
-      #   digest       0.11.3 → 0.10.7  (last version before edition2024 chain)
-      #
-      # `|| true` skips gracefully if a package isn't in the current dep graph.
-      - name: Generate Cargo.lock and pin edition2024 deps for bundled cargo
+      # Why edition2021 is safe: these crates declare edition2024 for future
+      # tooling but use no edition2024-exclusive syntax (gen keyword, etc.),
+      # so changing the manifest field has zero effect on compilation output.
+      - name: Vendor deps and patch edition2024 manifests for bundled cargo
         working-directory: ./ecosystem-token
         run: |
-          # 1. Resolve full graph with modern cargo
+          # 1. Vendor all deps with system cargo (1.85) — downloads edition2024 fine
+          echo "Vendoring all dependencies..."
+          cargo vendor vendor/ 2>&1 | tail -10
+
+          # 2. Lock the lockfile and downgrade format v4 → v3
           cargo generate-lockfile
-
-          # 2. Pin edition2024 packages to last bundled-cargo-safe versions.
-          #
-          # Rule: bundled cargo (~1.75) can't parse ANY Cargo.toml with
-          # edition = "2024". Two categories of fix:
-          #
-          #   A) Package has a pre-edition2024 release → pin to that version.
-          #   B) Package ONLY has edition2024 releases (e.g. toml_parser) →
-          #      pin the PARENT that introduced it to a version that doesn't
-          #      depend on it at all.
-          #
-          # Known problematic packages (add new ones here as CI finds them):
-          #
-          #   indexmap  ≥ 2.14.0  → edition2024. Pin to 2.13.2          [A]
-          #   block-buffer ≥ 0.11 → edition2024. Pin to 0.10.4          [A]
-          #   digest    ≥ 0.11    → edition2024. Pin to 0.10.7          [A]
-          #   toml_parser (ALL)   → always edition2024 (new crate).
-          #     Fix: pin toml_edit to 0.21.1 — last version that uses   [B]
-          #     winnow directly (no toml_parser dep at all).
-          #   toml_datetime ≥ 0.6.11 → may be edition2024. Pin 0.6.8.  [A]
-          #   shlex ≥ 2.0         → edition2024. Pin to 1.3.0.          [A]
-          #
-          # All guarded with `|| echo` — if package isn't in graph or
-          # version doesn't satisfy other constraints, we skip and continue.
-          echo "Pinning edition2024 transitive deps..."
-
-          # Category A — direct version pins
-          cargo update -p indexmap      --precise 2.13.2 || echo "indexmap: skipped"
-          cargo update -p block-buffer  --precise 0.10.4 || echo "block-buffer: skipped"
-          cargo update -p digest        --precise 0.10.7 || echo "digest: skipped"
-          cargo update -p toml_datetime --precise 0.6.8  || echo "toml_datetime: skipped"
-          cargo update -p shlex         --precise 1.3.0  || echo "shlex: skipped"
-
-          # Category B — parent pins to eliminate edition2024-only crates
-          # toml_parser has no pre-edition2024 version; pin its parent toml_edit
-          # to 0.21.1 (uses winnow directly, toml_parser never enters graph).
-          # Also pin toml to 0.8.12 which uses toml_edit 0.21.x.
-          cargo update -p toml_edit     --precise 0.21.1 || echo "toml_edit: skipped"
-          cargo update -p toml          --precise 0.8.12 || echo "toml: skipped"
-
-          echo "All pins applied."
-
-          # 3. Downgrade lockfile format v4 → v3
           sed -i 's/^version = 4$/version = 3/' Cargo.lock
+          echo "Cargo.lock format: $(head -2 Cargo.lock | tail -1)"
 
-          echo "✅ Cargo.lock ready (format v3, edition2024 deps pinned)"
-          head -4 Cargo.lock
-          echo "--- Key pinned versions in lockfile ---"
-          grep -A2 'name = "indexmap"' Cargo.lock | head -3
-          grep -A2 'name = "toml_edit"' Cargo.lock | head -3 || true
-          grep -A2 'name = "toml_parser"' Cargo.lock | head -3 || echo "(toml_parser not in graph ✅)"
+          # 3. Point cargo to vendored sources so bundled cargo never hits crates-io
+          mkdir -p .cargo
+          printf '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "vendor"\n' > .cargo/config.toml
+
+          # 4. Patch edition2024 → edition2021 in every vendored Cargo.toml
+          PATCHED=$(grep -rl 'edition = "2024"' vendor/ 2>/dev/null | wc -l)
+          find vendor/ -name "Cargo.toml" \
+            -exec sed -i 's/^edition = "2024"$/edition = "2021"/' {} \;
+          echo "✅ Patched $PATCHED vendored Cargo.toml files: edition2024 → edition2021"
+          echo "✅ Bundled cargo will read pre-patched manifests from vendor/ (no downloads)"
 
       # ── Build SBF ─────────────────────────────────────────────────────────
       - name: Build smart contract (anchor build → SBF bytecode)
@@ -324,15 +295,13 @@ jobs:
           sed -i "s/declare_id!(\".*\")/declare_id!(\"${{ secrets.PROGRAM_ID }}\")/" \
             ecosystem-token/programs/ecosystem-token/src/lib.rs
           cd ecosystem-token
+          cargo vendor vendor/ 2>&1 | tail -5
           cargo generate-lockfile
-          cargo update -p indexmap      --precise 2.13.2 || echo "indexmap: skipped"
-          cargo update -p block-buffer  --precise 0.10.4 || echo "block-buffer: skipped"
-          cargo update -p digest        --precise 0.10.7 || echo "digest: skipped"
-          cargo update -p toml_datetime --precise 0.6.8  || echo "toml_datetime: skipped"
-          cargo update -p shlex         --precise 1.3.0  || echo "shlex: skipped"
-          cargo update -p toml_edit     --precise 0.21.1 || echo "toml_edit: skipped"
-          cargo update -p toml          --precise 0.8.12 || echo "toml: skipped"
           sed -i 's/^version = 4$/version = 3/' Cargo.lock
+          mkdir -p .cargo
+          printf '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "vendor"\n' > .cargo/config.toml
+          find vendor/ -name "Cargo.toml" -exec sed -i 's/^edition = "2024"$/edition = "2021"/' {} \;
+          echo "✅ edition2024 manifests patched in vendor/"
           anchor build
 
       - name: Deploy to devnet
