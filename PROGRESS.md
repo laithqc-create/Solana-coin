@@ -187,3 +187,43 @@ Solana-coin/
 
 ---
 *Rules 1–8 active. All code: error handling, input validation, env vars for secrets, no redundant loops.*
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, paused for token budget)
+
+**Status:** 9 sequential CI debug fixes applied (see table above). Fix #9 (`ctutils` MSRV) failed — `--tools-version` flag panicked because our pinned Solana CLI (1.18.26) predates that flag's support in `cargo-build-sbf`.
+
+### Primary-source findings (verified via official Anchor docs/GitHub, Apache 2.0 licensed — commercial use confirmed safe)
+
+1. Anchor has an official `[toolchain]` section in `Anchor.toml` (since 0.29) meant to let the CLI (`avm`) manage Solana/Anchor version pairing automatically — we're not using it; we hand-roll CI install steps instead.
+2. Anchor 0.30.0+ is the version line built for the modern Solana v2/Agave ecosystem (platform-tools v1.42+, `cargo build-sbf` as default). We're on 0.29.0, which predates this.
+3. `--tools-version` flag on `cargo-build-sbf` requires Solana CLI 2.x — confirmed via `anza-xyz/agave#5389`, the exact issue matching our `ctutils` error. Our pinned `1.18.26` doesn't have it.
+4. Anchor recommends Solana `1.18.8` for 0.30.0, but that predates the flag too — likely need Solana 2.1.x+ for full modern platform-tools support.
+
+### Proposed next fix (NEEDS USER CONFIRMATION before proceeding — source-level version bump)
+
+- Bump `anchor-lang`/`anchor-spl` in `ecosystem-token/Cargo.toml`: `0.29.0` → `0.30.1`
+- Add/update `[toolchain]` section in `Anchor.toml`: `anchor_version = "0.30.1"`, `solana_version = "2.1.21"` (or latest stable 2.x)
+- Update CI workflow to install via `avm` (Anchor's official version manager) instead of pinned `npm install -g @coral-xyz/anchor-cli@0.29.0`
+- This should let Anchor's own tooling resolve a compatible modern platform-tools bundle automatically, removing the need for our manual vendor+patch/pin/tools-version workarounds (fixes #6–#9 may become unnecessary — worth testing if they can be simplified/removed after upgrade)
+- ⚠️ Risk: 0.29→0.30 has minor breaking changes per official changelog (e.g. `idl-build` feature now required in program `Cargo.toml`) — will need to check `programs/ecosystem-token/Cargo.toml` for `[features] idl-build = [...]` and add if missing
+
+### Exact next steps
+1. Get user confirmation to proceed with Anchor 0.29→0.30.1 upgrade
+2. Update `ecosystem-token/Cargo.toml` (workspace deps)
+3. Update `ecosystem-token/programs/ecosystem-token/Cargo.toml` — add `idl-build` feature if missing (required in 0.30+)
+4. Update `ecosystem-token/Anchor.toml` `[toolchain]` section
+5. Update `.github/workflows/build.yml` to use `avm install/use` instead of pinned npm anchor-cli
+6. Push, watch CI, iterate if new errors surface
+7. Once green: still need GitHub Secrets (`PROGRAM_ID`, `DEPLOY_KEYPAIR`) added by user
+8. Then: Telegram Mini App + Supabase (still fully pending user input — bot details, screens, Supabase project URL/tables)
+
+### All CI fixes applied so far (commits, in order)
+377c0b2 → cdd9997 → f74b675 → 9747eac → bdbf9cf → 8804808 → ce1a38d → f68caab → 23d46c5
+
+### Blockers
+- ⏳ User confirmation needed for Anchor 0.29→0.30.1 upgrade (source-level change)
+- ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+- ⏳ Telegram Bot details not yet provided
+- ⏳ Supabase project details not yet provided
