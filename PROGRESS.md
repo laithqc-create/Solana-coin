@@ -282,3 +282,25 @@ If next run fails, check whether it's:
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed, re-flag if unclear next session
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #14)
+
+### Fix #14 applied (commit `65c8007`)
+**Error:** "Error: Invalid workflow file" — GitHub couldn't parse the YAML at all (caught before any job ran).
+
+**Root cause:** Fix #13's heredoc (`cat > file << 'PYEOF' ... PYEOF`) had unindented Python body lines inside an indented `run: |` YAML block scalar — every line in a block scalar must stay indented at least as much as its siblings, or the parser treats the under-indented line as a new mapping key. Separately, plain bash heredoc terminators can't be indented at all (only `<<-` with tabs), making heredoc-in-indented-YAML-block fundamentally fragile.
+
+**Fix:** Replaced heredoc with `printf '%s\n' 'line1' 'line2' ... > file` — one Python line per quoted printf argument, each on its own properly-indented YAML line via backslash continuation. No indentation-sensitive embedded source, no unindented terminator.
+
+**Verified before pushing (Rule 8):** simulated the full sed-patch + printf-script-generation + checksum-recompute pipeline locally against a mock vendored crate — confirmed correct output. Also validated the complete workflow YAML parses via PyYAML. Confirmed via GitHub API post-push that the run actually reached `in_progress` status (previous run failed instantly at YAML parse stage).
+
+### Status: AWAITING NEXT CI RESULT (run in progress as of this checkpoint)
+Full fix chain so far (14 fixes): `377c0b2` → `cdd9997` → `f74b675` → `9747eac` → `bdbf9cf` → `8804808` → `ce1a38d` → `f68caab` → `23d46c5` → `04bf108` → `5b818fa` → `bb92c2c` → `65c8007`
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed, re-flag if unclear next session
