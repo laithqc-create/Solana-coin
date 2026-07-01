@@ -8,15 +8,20 @@ on:
   workflow_dispatch:
 
 env:
-  SOLANA_VERSION: "1.18.26"
-  ANCHOR_VERSION: "0.29.0"
+  # Upgraded from 1.18.26/0.29.0 (Session 9, fix #10) — verified against primary
+  # sources (official Anchor docs/GitHub, Apache 2.0). Anchor 0.30+ is the version
+  # line built for the modern Solana v2/Agave ecosystem (cargo build-sbf default,
+  # platform-tools v1.42+). Solana CLI 2.x is required for cargo-build-sbf's
+  # --tools-version flag to work at all (confirmed via anza-xyz/agave#5389 — our
+  # previous 1.18.26 pin predates that flag's introduction, causing a panic).
+  SOLANA_VERSION: "2.1.21"
+  ANCHOR_VERSION: "0.30.1"
   NODE_VERSION: "20"
   RUST_TOOLCHAIN: "1.85.0"
   # Platform-tools bundle used by cargo-build-sbf for the actual SBF cross-compile.
-  # Independent of SOLANA_VERSION (the CLI/validator/deploy tooling, kept old for
-  # Anchor 0.29 compatibility). Overriding this lets the SBF compiler itself use a
-  # modern rustc (>=1.85) without touching the Solana CLI version. See:
-  # https://github.com/anza-xyz/agave/issues/5389
+  # Kept as explicit override (defense in depth) even on modern Solana CLI 2.x,
+  # to guarantee a rustc new enough for edition2024 / high-MSRV transitive deps
+  # regardless of what platform-tools version ships by default with 2.1.21.
   PLATFORM_TOOLS_VERSION: "v1.54"
 
 jobs:
@@ -96,22 +101,17 @@ jobs:
             ecosystem-token/programs/ecosystem-token/src/lib.rs
           echo "✅ Program ID set to: $PROGRAM_ID"
 
-      # ── Vendor + edition2024 manifest patch (PERMANENT FIX) ───────────────────
-      # The Solana bundled cargo-build-sbf (platform-tools, ~cargo 1.75) cannot
-      # parse ANY Cargo.toml that declares edition = "2024". New crates in the
-      # TOML ecosystem (toml_parser, toml_datetime 1.x, etc.) are edition2024-only
-      # with no prior releases — per-package pinning hits a new crate every run.
+      # ── Vendor + edition2024 manifest patch (SAFETY NET) ───────────────────────
+      # Kept as defense-in-depth after upgrading to Solana CLI 2.1.21 + Anchor
+      # 0.30.1 + --tools-version v1.54 (all bundle much newer rustc than the old
+      # 1.18.26/0.29.0 pin). This step should now be a no-op in most cases (0
+      # files patched) but costs little and protects against any remaining
+      # edition2024-only crates slipping through on a fresh dependency resolve.
       #
-      # Permanent solution:
-      #   1. Vendor ALL deps using system cargo 1.85 (edition2024-aware).
-      #   2. Patch every edition = "2024" line → edition = "2021" in the vendor/.
-      #      The bundled cargo reads from vendor/, never hits crates-io, never
-      #      fails on an unreadable manifest.
-      #   3. Downgrade Cargo.lock format v4 → v3 (bundled cargo can't read v4).
-      #
-      # Why edition2021 is safe: these crates declare edition2024 for future
-      # tooling but use no edition2024-exclusive syntax (gen keyword, etc.),
-      # so changing the manifest field has zero effect on compilation output.
+      # Original rationale (Session 9, fixes #6-#7): old bundled cargo-build-sbf
+      # couldn't parse ANY Cargo.toml declaring edition = "2024". Some crates
+      # (toml_parser, toml_datetime 1.x) have no pre-edition2024 release at all,
+      # making per-package pinning a dead end — hence vendor + patch instead.
       - name: Vendor deps and patch edition2024 manifests for bundled cargo
         working-directory: ./ecosystem-token
         run: |
