@@ -89,6 +89,7 @@ Solana Program (on-chain)
 | 5 | Cargo.lock version 4 parse failure | Bundled cargo-build-sbf can't read lockfile v4 | `sed` v4→v3 after generation | `bdbf9cf` |
 | 6 | `edition2024` on `indexmap 2.14.0` | Bundled cargo can't parse edition2024 manifests | Per-package `--precise` pins | `8804808` |
 | 7 | `edition2024` on `toml_parser`/`toml_datetime 1.x` | No pre-edition2024 version exists — pinning impossible | **Vendor+patch**: `cargo vendor`, sed all `edition="2024"`→`"2021"`, redirect cargo to vendor/ | `f68caab` |
+| 8 | `ctutils v0.4.2` requires rustc 1.85+ (bundled rustc is 1.75.0-dev) | Real rustc MSRV gate, not manifest parsing — vendor+patch trick can't help. Every ctutils version needs 1.85+ (no version to pin to, same dead-end as fix #7) | `cargo build-sbf --tools-version v1.54` — overrides platform-tools bundle (with its own modern rustc) independent of Solana CLI version. Officially documented fix (anza-xyz/agave#5389) | `23d46c5` |
 
 ---
 
