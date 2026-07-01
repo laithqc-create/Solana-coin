@@ -149,6 +149,33 @@ jobs:
 
           echo "✅ Patched $EDITION_PATCHED manifests: edition2024 → edition2021"
           echo "✅ Patched $MSRV_PATCHED manifests: removed rust-version (MSRV) gate"
+
+          # 5. Recompute .cargo-checksum.json for every edited Cargo.toml.
+          #    cargo vendor stores a SHA-256 checksum per file and verifies it
+          #    before compiling ("directory sources are not intended to be
+          #    edited"). Since we intentionally edit vendored manifests above,
+          #    we must update the stored checksum to match, or cargo correctly
+          #    refuses to build (tamper protection working as designed).
+          cat > /tmp/fix_vendor_checksums.py << 'PYEOF'
+import hashlib, json, pathlib
+
+updated = 0
+for toml in pathlib.Path("vendor").glob("*/Cargo.toml"):
+    checksum_file = toml.parent / ".cargo-checksum.json"
+    if not checksum_file.exists():
+        continue
+    data = json.loads(checksum_file.read_text())
+    if "files" not in data or "Cargo.toml" not in data["files"]:
+        continue
+    new_hash = hashlib.sha256(toml.read_bytes()).hexdigest()
+    if data["files"]["Cargo.toml"] != new_hash:
+        data["files"]["Cargo.toml"] = new_hash
+        checksum_file.write_text(json.dumps(data))
+        updated += 1
+
+print(f"✅ Recomputed checksums for {updated} vendored Cargo.toml files")
+PYEOF
+          python3 /tmp/fix_vendor_checksums.py
           echo "✅ Bundled cargo will read pre-patched manifests from vendor/ (no downloads)"
 
       # ── Build SBF ─────────────────────────────────────────────────────────
@@ -324,7 +351,25 @@ jobs:
           printf '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "vendor"\n' > .cargo/config.toml
           find vendor/ -name "Cargo.toml" -exec sed -i 's/^edition = "2024"$/edition = "2021"/' {} \;
           find vendor/ -name "Cargo.toml" -exec sed -i '/^rust-version = /d' {} \;
-          echo "✅ edition2024 + rust-version (MSRV) manifests patched in vendor/"
+          cat > /tmp/fix_vendor_checksums.py << 'PYEOF'
+import hashlib, json, pathlib
+updated = 0
+for toml in pathlib.Path("vendor").glob("*/Cargo.toml"):
+    checksum_file = toml.parent / ".cargo-checksum.json"
+    if not checksum_file.exists():
+        continue
+    data = json.loads(checksum_file.read_text())
+    if "files" not in data or "Cargo.toml" not in data["files"]:
+        continue
+    new_hash = hashlib.sha256(toml.read_bytes()).hexdigest()
+    if data["files"]["Cargo.toml"] != new_hash:
+        data["files"]["Cargo.toml"] = new_hash
+        checksum_file.write_text(json.dumps(data))
+        updated += 1
+print(f"Recomputed checksums for {updated} vendored Cargo.toml files")
+PYEOF
+          python3 /tmp/fix_vendor_checksums.py
+          echo "✅ edition2024 + rust-version (MSRV) manifests patched, checksums fixed"
           anchor build
 
       - name: Deploy to devnet
