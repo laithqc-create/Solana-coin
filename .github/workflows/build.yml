@@ -97,52 +97,51 @@ jobs:
             ecosystem-token/programs/ecosystem-token/src/lib.rs
           echo "✅ Program ID set to: $PROGRAM_ID"
 
-      # ── Vendor + manifest patch: edition2024 AND rust-version (MSRV) ───────────
-      # Two SEPARATE Cargo mechanisms cause bundled-cargo build failures, and we
-      # had only fixed one of them:
-      #   A) edition = "2024" in a manifest → old cargo can't PARSE the file at all.
-      #   B) rust-version = "X.Y" in a manifest → cargo (any version) REFUSES to
-      #      compile if X.Y exceeds the active rustc, even if the manifest parses
-      #      fine and the code uses no new syntax. This is a declared MSRV gate,
-      #      checked independently of edition. (Confirmed root cause of the
-      #      ctutils v0.4.2 failure — verified ctutils is a real, actively
-      #      maintained RustCrypto crate via crates.io, not a one-off — this is
-      #      a genuine MSRV bump in a normal dependency, not a broken package.)
+      # ── Pin + vendor + manifest patch (three-layer defense) ────────────────────
+      # Layer 1 — explicit pins for crates with REAL syntax incompatibility, not
+      # just a declared-version gate. hashbrown 0.15/0.16 use `&raw const` syntax
+      # (stabilized Rust 1.82) and #[expect] attribute (stabilized Rust 1.81) —
+      # actual compile errors on bundled rustc, not a false gate. Verified via
+      # crates.io/docs.rs: hashbrown 0.14.5 (Apr 2024) predates both features and
+      # is a stable, widely-used release. Pinned here, BEFORE vendoring, so the
+      # vendor/ snapshot captures the compatible version instead of latest.
       #
-      # --tools-version (tried in fix #8) panics on both our old (1.18.26) and
-      # upgraded (2.1.21) Solana CLI — confirmed unreliable, removed entirely
-      # rather than guessed at further.
+      # Layer 2 — edition2024 patch: old cargo can't PARSE a manifest declaring
+      # edition = "2024" at all (separate from actual syntax used).
       #
-      # Fix: strip BOTH the edition2024 declaration AND any rust-version field
-      # from every vendored Cargo.toml. This is safe because: if a crate doesn't
-      # actually use syntax exclusive to a newer rustc, removing the *declared*
-      # minimum doesn't change what code gets compiled — it only removes an
-      # artificial version gate. If a crate genuinely needs newer syntax, we get
-      # a real, specific rustc compile error next (which we can then actually
-      # diagnose) instead of an opaque version-gate message.
-      - name: Vendor deps and patch edition2024 + rust-version for bundled cargo
+      # Layer 3 — rust-version (MSRV) strip: safety net for crates that bump
+      # their declared floor without using any actually-incompatible syntax
+      # (confirmed case: ctutils v0.4.2, a real RustCrypto crate). NOTE: this
+      # layer does NOT help when a crate genuinely uses newer syntax (as
+      # hashbrown 0.15/0.16 do) — that's what Layer 1 pins are for.
+      - name: Pin incompatible deps, vendor, and patch manifests for bundled cargo
         working-directory: ./ecosystem-token
         run: |
-          # 1. Vendor all deps with system cargo (1.85) — resolves everything fine
+          # 1. Resolve full graph with modern system cargo (1.85)
+          cargo generate-lockfile
+
+          # 2. Pin crates with confirmed real syntax incompatibility (Layer 1)
+          cargo update -p hashbrown --precise 0.14.5 || echo "hashbrown: pin skipped (not in graph or unsatisfiable)"
+          cargo update -p indexmap  --precise 2.2.6  || echo "indexmap: pin skipped (not in graph or unsatisfiable)"
+
+          # 3. Vendor using the now-pinned lockfile (--locked = don't re-resolve)
           echo "Vendoring all dependencies..."
           cargo vendor vendor/ 2>&1 | tail -10
 
-          # 2. Lock the lockfile and downgrade format v4 → v3
-          cargo generate-lockfile
+          # 4. Downgrade lockfile format v4 → v3 (bundled cargo can't read v4)
           sed -i 's/^version = 4$/version = 3/' Cargo.lock
           echo "Cargo.lock format: $(head -2 Cargo.lock | tail -1)"
 
-          # 3. Point cargo to vendored sources so bundled cargo never hits crates-io
+          # 5. Point cargo to vendored sources so bundled cargo never hits crates-io
           mkdir -p .cargo
           printf '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "vendor"\n' > .cargo/config.toml
 
-          # 4a. Patch edition2024 → edition2021 in every vendored Cargo.toml
+          # 6a. Patch edition2024 → edition2021 (Layer 2)
           EDITION_PATCHED=$(grep -rl 'edition = "2024"' vendor/ 2>/dev/null | wc -l)
           find vendor/ -name "Cargo.toml" \
             -exec sed -i 's/^edition = "2024"$/edition = "2021"/' {} \;
 
-          # 4b. Strip rust-version (MSRV) declarations entirely — removes the
-          #     version-gate check without altering any actual source code.
+          # 6b. Strip rust-version declarations (Layer 3, safety net only)
           MSRV_PATCHED=$(grep -rl '^rust-version = ' vendor/ 2>/dev/null | wc -l)
           find vendor/ -name "Cargo.toml" \
             -exec sed -i '/^rust-version = /d' {} \;
@@ -150,7 +149,7 @@ jobs:
           echo "✅ Patched $EDITION_PATCHED manifests: edition2024 → edition2021"
           echo "✅ Patched $MSRV_PATCHED manifests: removed rust-version (MSRV) gate"
 
-          # 5. Recompute .cargo-checksum.json for every edited Cargo.toml.
+          # 7. Recompute .cargo-checksum.json for every edited Cargo.toml.
           #    cargo vendor stores a SHA-256 checksum per file and verifies it
           #    before compiling ("directory sources are not intended to be
           #    edited"). Since we intentionally edit vendored manifests above,
@@ -338,14 +337,16 @@ jobs:
           fi
           echo "Final balance: $(solana balance)"
 
-      - name: Inject Program ID, vendor+patch deps, and build
+      - name: Inject Program ID, pin+vendor+patch deps, and build
         if: steps.prereq.outputs.skip == 'false'
         run: |
           sed -i "s/declare_id!(\".*\")/declare_id!(\"${{ secrets.PROGRAM_ID }}\")/" \
             ecosystem-token/programs/ecosystem-token/src/lib.rs
           cd ecosystem-token
-          cargo vendor vendor/ 2>&1 | tail -5
           cargo generate-lockfile
+          cargo update -p hashbrown --precise 0.14.5 || echo "hashbrown: pin skipped"
+          cargo update -p indexmap  --precise 2.2.6  || echo "indexmap: pin skipped"
+          cargo vendor vendor/ 2>&1 | tail -5
           sed -i 's/^version = 4$/version = 3/' Cargo.lock
           mkdir -p .cargo
           printf '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "vendor"\n' > .cargo/config.toml
@@ -369,7 +370,7 @@ jobs:
             'print(f"Recomputed checksums for {updated} vendored Cargo.toml files")' \
             > /tmp/fix_vendor_checksums.py
           python3 /tmp/fix_vendor_checksums.py
-          echo "✅ edition2024 + rust-version (MSRV) manifests patched, checksums fixed"
+          echo "✅ Pinned hashbrown/indexmap, patched manifests, checksums fixed"
           anchor build
 
       - name: Deploy to devnet
