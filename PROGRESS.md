@@ -201,13 +201,15 @@ Solana-coin/
 3. `--tools-version` flag on `cargo-build-sbf` requires Solana CLI 2.x — confirmed via `anza-xyz/agave#5389`, the exact issue matching our `ctutils` error. Our pinned `1.18.26` doesn't have it.
 4. Anchor recommends Solana `1.18.8` for 0.30.0, but that predates the flag too — likely need Solana 2.1.x+ for full modern platform-tools support.
 
-### Proposed next fix (NEEDS USER CONFIRMATION before proceeding — source-level version bump)
+### ✅ Fix #10 APPLIED (user confirmed) — Anchor 0.29.0→0.30.1, Solana 1.18.26→2.1.21
 
-- Bump `anchor-lang`/`anchor-spl` in `ecosystem-token/Cargo.toml`: `0.29.0` → `0.30.1`
-- Add/update `[toolchain]` section in `Anchor.toml`: `anchor_version = "0.30.1"`, `solana_version = "2.1.21"` (or latest stable 2.x)
-- Update CI workflow to install via `avm` (Anchor's official version manager) instead of pinned `npm install -g @coral-xyz/anchor-cli@0.29.0`
-- This should let Anchor's own tooling resolve a compatible modern platform-tools bundle automatically, removing the need for our manual vendor+patch/pin/tools-version workarounds (fixes #6–#9 may become unnecessary — worth testing if they can be simplified/removed after upgrade)
-- ⚠️ Risk: 0.29→0.30 has minor breaking changes per official changelog (e.g. `idl-build` feature now required in program `Cargo.toml`) — will need to check `programs/ecosystem-token/Cargo.toml` for `[features] idl-build = [...]` and add if missing
+Applied in commit `7825fc2`:
+- `ecosystem-token/Cargo.toml`: anchor-lang/anchor-spl 0.29.0 → 0.30.1
+- `ecosystem-token/programs/ecosystem-token/Cargo.toml`: added `idl-build` feature (mandatory in 0.30+)
+- `ecosystem-token/Anchor.toml`: `[toolchain]` anchor_version → 0.30.1, solana_version → 2.1.21
+- `.github/workflows/build.yml`: SOLANA_VERSION → 2.1.21, ANCHOR_VERSION → 0.30.1 (kept vendor+patch and --tools-version as safety nets)
+
+No contract logic changed — dependency version bump only.
 
 ### Exact next steps
 1. Get user confirmation to proceed with Anchor 0.29→0.30.1 upgrade
