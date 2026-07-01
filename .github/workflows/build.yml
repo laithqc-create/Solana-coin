@@ -10,19 +10,15 @@ on:
 env:
   # Upgraded from 1.18.26/0.29.0 (Session 9, fix #10) — verified against primary
   # sources (official Anchor docs/GitHub, Apache 2.0). Anchor 0.30+ is the version
-  # line built for the modern Solana v2/Agave ecosystem (cargo build-sbf default,
-  # platform-tools v1.42+). Solana CLI 2.x is required for cargo-build-sbf's
-  # --tools-version flag to work at all (confirmed via anza-xyz/agave#5389 — our
-  # previous 1.18.26 pin predates that flag's introduction, causing a panic).
+  # line built for the modern Solana v2/Agave ecosystem (cargo build-sbf default).
   SOLANA_VERSION: "2.1.21"
   ANCHOR_VERSION: "0.30.1"
   NODE_VERSION: "20"
   RUST_TOOLCHAIN: "1.85.0"
-  # Platform-tools bundle used by cargo-build-sbf for the actual SBF cross-compile.
-  # Kept as explicit override (defense in depth) even on modern Solana CLI 2.x,
-  # to guarantee a rustc new enough for edition2024 / high-MSRV transitive deps
-  # regardless of what platform-tools version ships by default with 2.1.21.
-  PLATFORM_TOOLS_VERSION: "v1.54"
+  # NOTE: cargo-build-sbf's --tools-version override flag (tried in fix #8) was
+  # removed — confirmed unreliable via repeated panics on both Solana CLI 1.18.26
+  # and 2.1.21. Manifest patching (edition2024 + rust-version, see fix #12 below)
+  # replaces it as the working solution; no platform-tools override needed.
 
 jobs:
   build:
@@ -101,21 +97,33 @@ jobs:
             ecosystem-token/programs/ecosystem-token/src/lib.rs
           echo "✅ Program ID set to: $PROGRAM_ID"
 
-      # ── Vendor + edition2024 manifest patch (SAFETY NET) ───────────────────────
-      # Kept as defense-in-depth after upgrading to Solana CLI 2.1.21 + Anchor
-      # 0.30.1 + --tools-version v1.54 (all bundle much newer rustc than the old
-      # 1.18.26/0.29.0 pin). This step should now be a no-op in most cases (0
-      # files patched) but costs little and protects against any remaining
-      # edition2024-only crates slipping through on a fresh dependency resolve.
+      # ── Vendor + manifest patch: edition2024 AND rust-version (MSRV) ───────────
+      # Two SEPARATE Cargo mechanisms cause bundled-cargo build failures, and we
+      # had only fixed one of them:
+      #   A) edition = "2024" in a manifest → old cargo can't PARSE the file at all.
+      #   B) rust-version = "X.Y" in a manifest → cargo (any version) REFUSES to
+      #      compile if X.Y exceeds the active rustc, even if the manifest parses
+      #      fine and the code uses no new syntax. This is a declared MSRV gate,
+      #      checked independently of edition. (Confirmed root cause of the
+      #      ctutils v0.4.2 failure — verified ctutils is a real, actively
+      #      maintained RustCrypto crate via crates.io, not a one-off — this is
+      #      a genuine MSRV bump in a normal dependency, not a broken package.)
       #
-      # Original rationale (Session 9, fixes #6-#7): old bundled cargo-build-sbf
-      # couldn't parse ANY Cargo.toml declaring edition = "2024". Some crates
-      # (toml_parser, toml_datetime 1.x) have no pre-edition2024 release at all,
-      # making per-package pinning a dead end — hence vendor + patch instead.
-      - name: Vendor deps and patch edition2024 manifests for bundled cargo
+      # --tools-version (tried in fix #8) panics on both our old (1.18.26) and
+      # upgraded (2.1.21) Solana CLI — confirmed unreliable, removed entirely
+      # rather than guessed at further.
+      #
+      # Fix: strip BOTH the edition2024 declaration AND any rust-version field
+      # from every vendored Cargo.toml. This is safe because: if a crate doesn't
+      # actually use syntax exclusive to a newer rustc, removing the *declared*
+      # minimum doesn't change what code gets compiled — it only removes an
+      # artificial version gate. If a crate genuinely needs newer syntax, we get
+      # a real, specific rustc compile error next (which we can then actually
+      # diagnose) instead of an opaque version-gate message.
+      - name: Vendor deps and patch edition2024 + rust-version for bundled cargo
         working-directory: ./ecosystem-token
         run: |
-          # 1. Vendor all deps with system cargo (1.85) — downloads edition2024 fine
+          # 1. Vendor all deps with system cargo (1.85) — resolves everything fine
           echo "Vendoring all dependencies..."
           cargo vendor vendor/ 2>&1 | tail -10
 
@@ -128,24 +136,27 @@ jobs:
           mkdir -p .cargo
           printf '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "vendor"\n' > .cargo/config.toml
 
-          # 4. Patch edition2024 → edition2021 in every vendored Cargo.toml
-          PATCHED=$(grep -rl 'edition = "2024"' vendor/ 2>/dev/null | wc -l)
+          # 4a. Patch edition2024 → edition2021 in every vendored Cargo.toml
+          EDITION_PATCHED=$(grep -rl 'edition = "2024"' vendor/ 2>/dev/null | wc -l)
           find vendor/ -name "Cargo.toml" \
             -exec sed -i 's/^edition = "2024"$/edition = "2021"/' {} \;
-          echo "✅ Patched $PATCHED vendored Cargo.toml files: edition2024 → edition2021"
+
+          # 4b. Strip rust-version (MSRV) declarations entirely — removes the
+          #     version-gate check without altering any actual source code.
+          MSRV_PATCHED=$(grep -rl '^rust-version = ' vendor/ 2>/dev/null | wc -l)
+          find vendor/ -name "Cargo.toml" \
+            -exec sed -i '/^rust-version = /d' {} \;
+
+          echo "✅ Patched $EDITION_PATCHED manifests: edition2024 → edition2021"
+          echo "✅ Patched $MSRV_PATCHED manifests: removed rust-version (MSRV) gate"
           echo "✅ Bundled cargo will read pre-patched manifests from vendor/ (no downloads)"
 
       # ── Build SBF ─────────────────────────────────────────────────────────
-      # --tools-version forces cargo-build-sbf to use a specific platform-tools
-      # bundle (with its own rustc), independent of the installed Solana CLI
-      # version. This gives us a modern rustc (>=1.85, handles edition2024 fine)
-      # for the actual SBF cross-compile step, without upgrading Solana CLI
-      # itself (which could break Anchor 0.29 compatibility elsewhere).
       - name: Build smart contract (anchor build → SBF bytecode)
         working-directory: ./ecosystem-token
         run: |
-          anchor build -- --tools-version ${{ env.PLATFORM_TOOLS_VERSION }}
-          echo "✅ SBF build complete (platform-tools ${{ env.PLATFORM_TOOLS_VERSION }})"
+          anchor build
+          echo "✅ SBF build complete"
 
       # ── Validate output ───────────────────────────────────────────────────
       - name: Validate SBF output
@@ -300,7 +311,7 @@ jobs:
           fi
           echo "Final balance: $(solana balance)"
 
-      - name: Inject Program ID, pin edition2024 deps, and build
+      - name: Inject Program ID, vendor+patch deps, and build
         if: steps.prereq.outputs.skip == 'false'
         run: |
           sed -i "s/declare_id!(\".*\")/declare_id!(\"${{ secrets.PROGRAM_ID }}\")/" \
@@ -312,8 +323,9 @@ jobs:
           mkdir -p .cargo
           printf '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "vendor"\n' > .cargo/config.toml
           find vendor/ -name "Cargo.toml" -exec sed -i 's/^edition = "2024"$/edition = "2021"/' {} \;
-          echo "✅ edition2024 manifests patched in vendor/"
-          anchor build -- --tools-version ${{ env.PLATFORM_TOOLS_VERSION }}
+          find vendor/ -name "Cargo.toml" -exec sed -i '/^rust-version = /d' {} \;
+          echo "✅ edition2024 + rust-version (MSRV) manifests patched in vendor/"
+          anchor build
 
       - name: Deploy to devnet
         if: steps.prereq.outputs.skip == 'false'
