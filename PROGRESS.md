@@ -304,3 +304,30 @@ Full fix chain so far (14 fixes): `377c0b2` → `cdd9997` → `f74b675` → `974
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed, re-flag if unclear next session
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #15)
+
+### Fix #15 applied (commit `f7b3d3e`)
+**Error:** 21 real compile errors in `vendor/hashbrown` — `&raw const` syntax (Rust 1.82+), `#[expect]` attribute (Rust 1.81+), `error_in_core` (~1.81+), all "experimental" on the active rustc.
+
+**Critical correction to fix #12:** stripping `rust-version` was actively counterproductive for this case — it's not a false gate, hashbrown 0.15/0.16 genuinely use newer syntax. Removing the declared MSRV let broken code reach the compiler instead of a clean, actionable cargo message. This also confirms platform-tools' bundled rustc is still pre-1.81 even on our upgraded Solana CLI 2.1.21 (matches primary-source evidence: agave#5389 showed even CLI 2.1.16 shipping rustc 1.79 by default).
+
+**Fix:** Verified via crates.io/docs.rs that `hashbrown 0.14.5` (Apr 2024) predates all three gated features. Pinned explicitly BEFORE vendoring (`cargo update -p hashbrown --precise 0.14.5`, `indexmap --precise 2.2.6`) so the vendor snapshot captures compatible versions. Restructured the vendor step into three clearly-documented layers:
+1. Explicit pins (real syntax incompatibility — hashbrown/indexmap)
+2. edition2024 patch (manifest parse-level, unchanged)
+3. rust-version strip (safety net only, for pure declared-MSRV bumps like ctutils — NOT a fix for genuine syntax issues)
+
+**Verified before pushing (Rule 8):** YAML validated via PyYAML, confirmed via GitHub API that the run reached `in_progress`.
+
+### Status: AWAITING NEXT CI RESULT (run in progress as of this checkpoint)
+Full fix chain (15 fixes): `377c0b2`→`cdd9997`→`f74b675`→`9747eac`→`bdbf9cf`→`8804808`→`ce1a38d`→`f68caab`→`23d46c5`→`04bf108`→`5b818fa`→`bb92c2c`→`65c8007`→`e883bcf`(docs)→`f7b3d3e`
+
+**If another crate hits the same "real syntax incompatibility" pattern** (not just a declared-version gate), the template is: verify via crates.io/docs.rs what version predates the specific gated feature, add `cargo update -p <crate> --precise <version>` to the pin list in BOTH jobs (Layer 1, before vendoring).
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
