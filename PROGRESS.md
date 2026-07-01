@@ -229,3 +229,32 @@ No contract logic changed — dependency version bump only.
 - ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
 - ⏳ Telegram Bot details not yet provided
 - ⏳ Supabase project details not yet provided
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #12)
+
+### Fix #12 applied (commit `5b818fa`)
+**Error:** `ctutils v0.4.2` requires rustc 1.85+, panic on `--tools-version v1.54` flag (twice, on two different Solana CLI versions).
+
+**Verified via primary source (crates.io directly):** `ctutils` is a real, actively-maintained RustCrypto crate (22 versions published) — not a dead-end single-version crate like `toml_parser` was.
+
+**Root cause identified:** Two SEPARATE Cargo mechanisms were causing bundled-cargo build failures — we'd only patched one:
+- `edition = "2024"` → manifest **parse** failure (already fixed via vendor+patch)
+- `rust-version = "X.Y"` → cargo **refuses to compile** if X.Y exceeds active rustc, regardless of manifest parsing or actual syntax used (NOT previously patched — this was the gap)
+
+**Fix applied:** Extended the vendor+patch step to also strip `rust-version = ...` lines from every vendored `Cargo.toml`, alongside the existing edition2024 patch. Also **removed `--tools-version` entirely** — confirmed unreliable/broken via two separate panics on two different Solana CLI versions (1.18.26 and 2.1.21), not usable regardless of CLI version.
+
+### Status: AWAITING NEXT CI RESULT
+This should resolve the ctutils failure and likely prevent future MSRV-only failures (a whole category, not just this one crate). If another error surfaces, check:
+1. Is it a NEW error type, or ctutils/MSRV again? (would mean the patch didn't apply correctly — check CI log for "Patched N manifests: removed rust-version" line to confirm it ran)
+2. Full CI fix history: commits `377c0b2` → `cdd9997` → `f74b675` → `9747eac` → `bdbf9cf` → `8804808` → `ce1a38d` → `f68caab` → `23d46c5` → `04bf108` → `5b818fa` (12 fixes total)
+
+### All pending blockers (unchanged from before)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`) — needed before devnet auto-deploy works
+2. ⏳ Telegram Mini App details — awaiting user input (bot username, screens needed, tech stack)
+3. ⏳ Supabase project details — awaiting user input (project URL, tables, edge functions)
+4. ⚠️ **SECURITY: user's original GitHub token is still embedded in this sandbox's git remote URL** — flagged multiple times for rotation, unclear if done. Do NOT reuse/print this token. Recommend re-flagging at start of next session.
+
+### Rule 5/6 compliance note
+All CI fixes so far are toolchain/build configuration changes only — no third-party code copied. Anchor (Apache 2.0) and all Rust crates involved are confirmed permissively licensed for commercial use.
