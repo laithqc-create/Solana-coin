@@ -78,7 +78,17 @@ Solana Program (on-chain)
 | 4 | 3 unit test failures in `morpho.rs` (off by 10x) | Test assertions hardcoded wrong expected values — production fee math (`LAUNCHPAD_FEE_BPS=10`/0.1%, `STANDARD_FEE_BPS=50`/0.5%) was correct; tests expected results 10x too small (decimal point error) | Corrected test expected values: 1,000 not 100 / 5,000 not 500 / 10,000 not 1,000. No production logic changed | `9747eac` |
 | 5 | `anchor build` fails: "lock file version 4 requires -Znext-lockfile-bump" | `anchor build` resolves deps via our rustup Rust 1.85 (writes lockfile v4 by default), but `cargo-build-sbf` internally uses Solana's *bundled* platform-tools cargo (pre-1.78) for the actual SBF compile — can't read v4 lockfiles | Generate lockfile with modern toolchain, then `sed` its version field down to `3` before `anchor build` runs. Applied to both `build` and `deploy-devnet` jobs. Safe — no git-sourced deps in workspace | `bdbf9cf` |
 
-**Status:** Awaiting next CI run result. If new errors appear, paste here.
+**Status:** Vendor+patch approach deployed. Should be the final CI fix.
+
+| # | Error | Root Cause | Fix | Commit |
+|---|-------|-----------|-----|--------|
+| 1 | `edition2024` on `block-buffer`/`digest` | Rust 1.75 pinned in workflow | Bumped to 1.85.0 | `377c0b2` |
+| 2 | `E0433: could not find ErrorCode` (×30) | Anchor `require!` needs `crate::ErrorCode::Variant` but enum named `EcosystemError` | Explicit `EcosystemError::Variant` paths | `cdd9997` |
+| 3 | `E0433: undeclared type EcosystemError` | Glob import brought variants but not the type itself | `use crate::errors::EcosystemError;` | `f74b675` |
+| 4 | 3 test failures in `morpho.rs` | Test assertions off by 10x (decimal error) | Corrected expected values | `9747eac` |
+| 5 | Cargo.lock version 4 parse failure | Bundled cargo-build-sbf can't read lockfile v4 | `sed` v4→v3 after generation | `bdbf9cf` |
+| 6 | `edition2024` on `indexmap 2.14.0` | Bundled cargo can't parse edition2024 manifests | Per-package `--precise` pins | `8804808` |
+| 7 | `edition2024` on `toml_parser`/`toml_datetime 1.x` | No pre-edition2024 version exists — pinning impossible | **Vendor+patch**: `cargo vendor`, sed all `edition="2024"`→`"2021"`, redirect cargo to vendor/ | `f68caab` |
 
 ---
 
