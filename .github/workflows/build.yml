@@ -149,7 +149,39 @@ jobs:
           echo "✅ Patched $EDITION_PATCHED manifests: edition2024 → edition2021"
           echo "✅ Patched $MSRV_PATCHED manifests: removed rust-version (MSRV) gate"
 
-          # 4c. Patch gated syntax directly in vendored hashbrown source (Layer 4)
+          # 4c. GENERALIZED patches — these two patterns have now recurred
+          #     across multiple crates (hashbrown, then indexmap), so they run
+          #     across the ENTIRE vendor/ tree instead of being crate-specific.
+          #
+          #     #[expect(...)] -> #[allow(...)]: safe blind substitution
+          #     (expect = allow + "error if lint never fires"; allow is
+          #     strictly looser). Only the attribute name changes.
+          find vendor/ -name "*.rs" -exec sed -i 's/#\[expect(/#[allow(/g' {} \;
+
+          #     impl core::error::Error for X {} -> deleted: gated on unstable
+          #     error_in_core (issue #103765). Safe to drop — our program never
+          #     exercises these trait impls on vendored crates' internal error
+          #     types. NOTE: uses a read-loop, not find -exec ... {} \; — the
+          #     -exec form performs {} substitution on EVERY literal "{}" in
+          #     the command, including the one inside our own sed pattern
+          #     (matching Rust's empty struct body), corrupting the regex.
+          #     Caught via local testing before this ever reached CI.
+          find vendor/ -name "*.rs" | while read -r rsfile; do
+            sed -i '/^impl core::error::Error for [A-Za-z_][A-Za-z0-9_]* {}$/d' "$rsfile"
+          done
+
+          #     + use<'a, K, V, ...> precise-capturing bounds (stabilized Rust
+          #     1.82) -> stripped. Under edition2021 (which we've forced via
+          #     the edition patch above), return-position impl Trait already
+          #     captures all in-scope lifetimes by default — the exact
+          #     behavior this syntax exists to opt into under edition2024.
+          #     Removing it doesn't change what's captured, only removes now-
+          #     unparseable syntax expressing something already implied.
+          find vendor/ -name "*.rs" -exec sed -i 's/ + use<[^>]*>//g' {} \;
+
+          echo "✅ Vendor-wide: #[expect]→#[allow], error_in_core impls removed, use<> bounds stripped"
+
+          # 4d. Patch gated syntax specific to individual crates (Layer 4b)
           if [ -d vendor/hashbrown ]; then
             HB=vendor/hashbrown/src
             sed -i \
@@ -164,18 +196,16 @@ jobs:
             sed -i \
               's/ptr::read(&raw const guard\.dropfn)/ptr::read((\&guard.dropfn) as *const _)/' \
               "$HB/scopeguard.rs" 2>/dev/null || true
-            # #[expect(...)] -> #[allow(...)] across every hashbrown source file
-            # (safe as a blind token substitution: expect/allow share identical
-            # argument syntax, and this only touches the attribute name, never
-            # the multi-line argument lists that follow it)
-            find "$HB" -name "*.rs" -exec sed -i 's/#\[expect(/#[allow(/g' {} \;
-            # Remove the error_in_core-gated trait impl (single exact line)
+            echo "✅ Patched hashbrown-specific: &raw const (4x)"
+          fi
+          if [ -d vendor/indexmap ]; then
+            # size_of used bare, relying on the edition2024 prelude auto-import
+            # (core::mem::size_of). Since we forced edition2021, it's no longer
+            # implicitly in scope — qualify the one known call site explicitly.
             sed -i \
-              '/^impl core::error::Error for TryReserveError {}$/d' \
-              "$HB/lib.rs" 2>/dev/null || true
-            echo "✅ Patched hashbrown source: raw const (4x), #[expect]→#[allow], error_in_core impl removed"
-          else
-            echo "ℹ️  vendor/hashbrown not present this run — skipping source patch"
+              's#/ size_of::<Bucket<K, V>>()#/ core::mem::size_of::<Bucket<K, V>>()#' \
+              vendor/indexmap/src/inner.rs 2>/dev/null || true
+            echo "✅ Patched indexmap-specific: size_of qualified to core::mem::size_of"
           fi
 
           # 5. Recompute .cargo-checksum.json for EVERY file in EVERY vendored
@@ -387,14 +417,20 @@ jobs:
           printf '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "vendor"\n' > .cargo/config.toml
           find vendor/ -name "Cargo.toml" -exec sed -i 's/^edition = "2024"$/edition = "2021"/' {} \;
           find vendor/ -name "Cargo.toml" -exec sed -i '/^rust-version = /d' {} \;
+          find vendor/ -name "*.rs" -exec sed -i 's/#\[expect(/#[allow(/g' {} \;
+          find vendor/ -name "*.rs" | while read -r rsfile; do
+            sed -i '/^impl core::error::Error for [A-Za-z_][A-Za-z0-9_]* {}$/d' "$rsfile"
+          done
+          find vendor/ -name "*.rs" -exec sed -i 's/ + use<[^>]*>//g' {} \;
           if [ -d vendor/hashbrown ]; then
             HB=vendor/hashbrown/src
             sed -i 's/ptr::read(&raw const self\.alloc)/ptr::read((\&self.alloc) as *const _)/' "$HB/raw.rs" 2>/dev/null || true
             sed -i 's/copy_from_nonoverlapping(&raw const self\.table, 1)/copy_from_nonoverlapping((\&self.table) as *const _, 1)/' "$HB/raw.rs" 2>/dev/null || true
             sed -i 's/ptr::read(&raw const guard\.value)/ptr::read((\&guard.value) as *const _)/' "$HB/scopeguard.rs" 2>/dev/null || true
             sed -i 's/ptr::read(&raw const guard\.dropfn)/ptr::read((\&guard.dropfn) as *const _)/' "$HB/scopeguard.rs" 2>/dev/null || true
-            find "$HB" -name "*.rs" -exec sed -i 's/#\[expect(/#[allow(/g' {} \;
-            sed -i '/^impl core::error::Error for TryReserveError {}$/d' "$HB/lib.rs" 2>/dev/null || true
+          fi
+          if [ -d vendor/indexmap ]; then
+            sed -i 's#/ size_of::<Bucket<K, V>>()#/ core::mem::size_of::<Bucket<K, V>>()#' vendor/indexmap/src/inner.rs 2>/dev/null || true
           fi
           printf '%s\n' \
             'import hashlib, json, pathlib' \
