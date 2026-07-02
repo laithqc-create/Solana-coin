@@ -331,3 +331,34 @@ Full fix chain (15 fixes): `377c0b2`→`cdd9997`→`f74b675`→`9747eac`→`bdbf
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #16)
+
+### Fix #16 applied (commit `b990312`)
+**Error:** Same hashbrown error as fix #15 — CONFIRMED fix #15's `cargo update -p hashbrown --precise 0.14.5` silently failed (hashbrown v0.17.1 still compiled). No Rust toolchain in this sandbox to run `cargo tree` and find the exact blocking dependent crate.
+
+**Fix:** Abandoned dependency-pin approach (unreliable, confirmed twice). Directly patched the 3 gated constructs in vendored hashbrown source using exact lines from CI error output:
+- `&raw const EXPR` → `(&EXPR) as *const _` (stable-since-1.0 equivalent)
+- `#[expect(...)]` → `#[allow(...)]` (strictly looser, safe)
+- `impl core::error::Error for TryReserveError {}` → deleted (unused trait impl, gated on unstable `error_in_core`)
+
+Also generalized the checksum-recompute script from Cargo.toml-only to ALL files in ALL vendored crates, since we now patch `.rs` files too.
+
+**Verified before pushing (Rule 8):** simulated all 6 sed patches locally against synthetic hashbrown-shaped files — confirmed correct output. Verified generalized checksum script re-hashes correctly. Validated YAML via PyYAML.
+
+### Status: AWAITING NEXT CI RESULT (run in progress as of this checkpoint)
+Full fix chain (16 fixes): `377c0b2`→`cdd9997`→`f74b675`→`9747eac`→`bdbf9cf`→`8804808`→`ce1a38d`→`f68caab`→`23d46c5`→`04bf108`→`5b818fa`→`bb92c2c`→`65c8007`→`e883bcf`→`f7b3d3e`→`6cff57d`(docs)→`b990312`
+
+### If this fails again
+The hashbrown source patch is now the most targeted, verified fix possible without CI feedback. If it STILL fails:
+1. Check if error is a NEW hashbrown line not covered by our 6 patches (hashbrown version may have shifted between CI runs, changing line numbers/exact wording — check exact error text against what our sed patterns match)
+2. Check if a DIFFERENT crate now hits the same "real syntax incompatibility" pattern — same source-patch approach applies, just need the crate name + exact offending lines from CI output
+3. Consider whether it's time to accept a real Rust toolchain sandbox limitation and ask the user to run one candidate fix in Codespaces/locally rather than pure CI-log iteration, given this has gone 16 rounds
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
