@@ -362,3 +362,34 @@ The hashbrown source patch is now the most targeted, verified fix possible witho
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #17)
+
+### Fix #17 applied (commit `dec63e9`)
+**Good news:** hashbrown compiled clean — fix #16 confirmed working. Same category of error resurfaced in `indexmap` itself:
+- `use<'_, K, V>` precise-capturing bounds (Rust 1.82+)
+- bare `size_of()` relying on edition2024's expanded prelude (broke because we force edition2021)
+- `#[expect(...)]` — same pattern as hashbrown, confirmed recurring
+- `impl core::error::Error for X {}` — same pattern, now on TWO types (TryReserveError, GetDisjointMutError)
+
+**Fix:** Generalized the two recurring patterns (`#[expect]`, `error_in_core` impl removal) from hashbrown-only to the entire `vendor/` tree. Added indexmap-specific patches for `use<>` bound stripping and `size_of` qualification.
+
+**Real bug caught via local testing before reaching CI (Rule 8 win):** `find vendor/ -name "*.rs" -exec sed -i '...{}...' {} \;` corrupted its own sed pattern — `find`'s `{}` placeholder substitution replaces **every** literal `{}` in the command, including the one inside our sed regex (matching Rust's empty struct body). Fixed by switching that one command to a `find | while read -r file; do sed ...; done` loop. Audited all other `find -exec` usages in the file — none else contain a literal `{}` in their pattern, so they're safe.
+
+**Verified before pushing:** built synthetic files matching indexmap's exact error lines, ran the full patch sequence in final order, confirmed correct output. Validated YAML.
+
+### Status: AWAITING NEXT CI RESULT (run in progress as of this checkpoint)
+Full fix chain (17 fixes): `377c0b2`→`cdd9997`→`f74b675`→`9747eac`→`bdbf9cf`→`8804808`→`ce1a38d`→`f68caab`→`23d46c5`→`04bf108`→`5b818fa`→`bb92c2c`→`65c8007`→`e883bcf`→`f7b3d3e`→`6cff57d`→`b990312`→`d587d96`(docs)→`dec63e9`
+
+### Pattern established for future crates hitting this same category
+1. `#[expect(...)]` and `impl core::error::Error for X {}` are now patched **vendor-wide** — should not need per-crate fixes for these two specific patterns anymore.
+2. `&raw const` (hashbrown-specific, 4 exact lines) and `use<>`/`size_of` (now vendor-wide) cover what we've seen so far.
+3. If a genuinely NEW gated-syntax pattern appears in yet another crate: verify the exact lines from CI output, write a targeted or generalized sed patch (test locally first — see the `find -exec {}` collision lesson above), add to the appropriate layer in both jobs.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
