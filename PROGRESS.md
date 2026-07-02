@@ -393,3 +393,30 @@ Full fix chain (17 fixes): `377c0b2`→`cdd9997`→`f74b675`→`9747eac`→`bdbf
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #18)
+
+### Fix #18 applied (commit `7613729`)
+**Error:** indexmap hit a THIRD newer-syntax wall — `const fn` + mutable refs (const_mut_refs, Rust 1.83), 50 errors (up from 11). Three consecutive rounds of escalating patches on indexmap alone.
+
+**Strategy change (Rule 7):** stopped patching indexmap's bleeding-edge syntax line-by-line (unsustainable, expanding target) and pinned it to `2.2.6` instead — but THIS TIME verified against the actual resolved `Cargo.lock` entry, not silently trusted like fix #15's failed attempt. The pin is followed by a grep of the lockfile and an unconditional log line showing what actually resolved, so a repeat silent failure is immediately visible in CI output instead of surfacing as a confusing downstream error 1-2 rounds later.
+
+Also added a generalized vendor-wide `const fn NAME(&mut self)` → `fn NAME(&mut self)` patch as a safety net regardless of whether the pin succeeds.
+
+**Verified before pushing:** const-fn regex tested locally against synthetic source (correct output), lockfile version-extraction logic tested against a realistic `[[package]]` block, confirmed no `{}` collision in the new find pattern, YAML validated.
+
+### Status: AWAITING NEXT CI RESULT (run in progress as of this checkpoint)
+Full fix chain (18 fixes): `377c0b2`→`cdd9997`→`f74b675`→`9747eac`→`bdbf9cf`→`8804808`→`ce1a38d`→`f68caab`→`23d46c5`→`04bf108`→`5b818fa`→`bb92c2c`→`65c8007`→`e883bcf`→`f7b3d3e`→`6cff57d`→`b990312`→`d587d96`→`dec63e9`→`444d11c`(docs)→`7613729`
+
+### Critical: check the CI log for the indexmap pin verification line
+Look for: `ℹ️  indexmap resolved to: X.X.X`
+- If `2.2.6` → pin succeeded, should avoid all 3 prior syntax issues at once
+- If anything else → pin failed again (find out WHY this time, don't just re-guess — check what's forcing the floor via the tee'd `/tmp/indexmap_pin.log` output in the CI log, which will show cargo's own error explaining the conflicting requirement)
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
