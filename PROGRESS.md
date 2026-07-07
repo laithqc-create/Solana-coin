@@ -450,3 +450,35 @@ This closes the --tools-version path for good with real evidence. Next path woul
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #20)
+
+### Fix #20 applied (commit `7b05acf`)
+**Definitive result:** `--tools-version` panics identically whether called via `anchor build -- --tools-version` (fix #8) or `cargo build-sbf` directly (fix #19) — same exact panic both times. **Confirmed broken in this environment regardless of invocation method.** Abandoned for good — no more attempts at this flag.
+
+**Also caught 2 real bugs in fix #19's own code** (Rule 8 violations, my own mistakes):
+1. `if cmd | tee file; then` checks `tee`'s exit code, not `cmd`'s — the "SUCCEEDED" message was always misleading.
+2. `echo VAR=true >> "$GITHUB_ENV"` only takes effect in later CI *steps*, not later commands in the same step — the fallback logic never actually worked as intended.
+
+**Reverted both jobs to plain `anchor build`** (last known-working path, all Layer 1-4 source patches still in place).
+
+**Since indexmap's `--precise 2.2.6` pin still isn't taking effect** (CI compiled `indexmap v2.14.0` despite the pin attempt) and further source-patching is unsustainable, **added real diagnostics instead of guessing another version**:
+- Full `cargo update` output for the pin attempt, now printed unconditionally (was previously only tee'd to a file, never displayed in logs)
+- `cargo tree -i indexmap --edges normal` — directly shows what depends on indexmap and its required version constraint, without needing a local Rust toolchain
+
+### Status: AWAITING NEXT CI RESULT — should give us the actual dependency-graph answer
+**Look for in the CI log:**
+- `───────────── FULL cargo update output (indexmap pin attempt) ─────────────` — cargo's own explanation of why `--precise 2.2.6` fails (likely a line like "package X requires indexmap ^Y.Z")
+- `───────────── cargo tree -i indexmap (who depends on it, and why) ─────────────` — the actual reverse-dependency tree
+
+**Next step once we have this data:** identify the specific crate forcing a newer indexmap floor, and either (a) pin that crate to an older version instead, or (b) accept indexmap 2.14.0 is unavoidable given current dependencies and reconsider the whole toolchain strategy (e.g., research whether a specific known-good Solana CLI version ships modern-enough platform-tools by default, verified via primary source, not `--tools-version` which is now closed).
+
+Full fix chain (20 fixes): `377c0b2`→`cdd9997`→`f74b675`→`9747eac`→`bdbf9cf`→`8804808`→`ce1a38d`→`f68caab`→`23d46c5`→`04bf108`→`5b818fa`→`bb92c2c`→`65c8007`→`e883bcf`→`f7b3d3e`→`6cff57d`→`b990312`→`d587d96`→`dec63e9`→`444d11c`→`7613729`→`f287c5b`→`708dc9d`→`dce615d`(docs)→`7b05acf`
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
