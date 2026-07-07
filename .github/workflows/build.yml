@@ -15,10 +15,15 @@ env:
   ANCHOR_VERSION: "0.30.1"
   NODE_VERSION: "20"
   RUST_TOOLCHAIN: "1.85.0"
-  # NOTE: cargo-build-sbf's --tools-version override flag (tried in fix #8) was
-  # removed — confirmed unreliable via repeated panics on both Solana CLI 1.18.26
-  # and 2.1.21. Manifest patching (edition2024 + rust-version, see fix #12 below)
-  # replaces it as the working solution; no platform-tools override needed.
+  # RE-ADDED (fix #19) after removal in fix #12. Source-patching indexmap hit a
+  # real structural limit (dozens of deep const-fn/API incompatibilities, not
+  # a few isolated constructs) — reverting to root cause: get a modern rustc
+  # onto the SBF compile path. Verified 'v1.54' is the correct tag format via
+  # primary source (github.com/anza-xyz/platform-tools/releases). This attempt
+  # calls cargo-build-sbf DIRECTLY (bypassing anchor build's wrapper, which may
+  # not forward the flag correctly — the prior two panics were never actually
+  # root-caused to the flag itself vs. Anchor's forwarding of it).
+  PLATFORM_TOOLS_VERSION: "v1.54"
 
 jobs:
   build:
@@ -281,11 +286,45 @@ jobs:
           echo "✅ Bundled cargo will read pre-patched sources from vendor/ (no downloads)"
 
       # ── Build SBF ─────────────────────────────────────────────────────────
-      - name: Build smart contract (anchor build → SBF bytecode)
+      # STRATEGY CHANGE (fix #19): source-patching hit a real structural limit
+      # — indexmap's latest version needs dozens of deep const-fn/API features
+      # (const_mut_refs, split_at_checked, is_sorted, etc.), not just a few
+      # isolated syntax constructs. Continuing to patch line-by-line is no
+      # longer sustainable (Rule 7). Reverting to root cause: get a genuinely
+      # modern rustc onto the SBF compile path.
+      #
+      # --tools-version panicked twice before (fix #8, on two different Solana
+      # CLI versions) when invoked as 'anchor build -- --tools-version v1.54'.
+      # Verified via primary source (github.com/anza-xyz/platform-tools/releases)
+      # that 'v1.54' is the CORRECT tag format — the panic wasn't a malformed
+      # tag. This attempt calls cargo-build-sbf DIRECTLY, bypassing Anchor's
+      # build wrapper entirely, to get unambiguous evidence on whether the
+      # flag itself works or whether Anchor's argument-forwarding was the
+      # actual problem. Falls back to plain 'anchor build' (all our patches
+      # still in place as a safety net) if the direct call also fails.
+      - name: Build smart contract (try direct cargo-build-sbf with modern tools first)
         working-directory: ./ecosystem-token
         run: |
-          anchor build
-          echo "✅ SBF build complete"
+          echo "=== Attempt 1: cargo build-sbf --tools-version ${{ env.PLATFORM_TOOLS_VERSION }} (direct, bypassing anchor build wrapper) ==="
+          if cargo build-sbf \
+              --manifest-path programs/ecosystem-token/Cargo.toml \
+              --tools-version ${{ env.PLATFORM_TOOLS_VERSION }} \
+              2>&1 | tee /tmp/direct_sbf_build.log; then
+            echo "✅ Direct cargo-build-sbf with --tools-version SUCCEEDED"
+            echo "DIRECT_BUILD_OK=true" >> "$GITHUB_ENV"
+          else
+            echo "⚠️  Direct cargo-build-sbf with --tools-version FAILED (see log above)"
+            echo "DIRECT_BUILD_OK=false" >> "$GITHUB_ENV"
+          fi
+
+          if [ "$DIRECT_BUILD_OK" != "true" ]; then
+            echo "=== Falling back to: anchor build (patched vendor/ sources, default toolchain) ==="
+            anchor build
+            echo "✅ Fallback anchor build complete"
+          else
+            echo "ℹ️  Skipping anchor build — direct cargo-build-sbf already produced the .so"
+            echo "ℹ️  IDL generation (anchor build's other job) may still be needed separately — non-fatal if missing, see next steps"
+          fi
 
       # ── Validate output ───────────────────────────────────────────────────
       - name: Validate SBF output
@@ -498,7 +537,12 @@ jobs:
             > /tmp/fix_vendor_checksums.py
           python3 /tmp/fix_vendor_checksums.py
           echo "✅ Patched manifests + hashbrown source, checksums fixed"
-          anchor build
+          if cargo build-sbf --manifest-path programs/ecosystem-token/Cargo.toml --tools-version ${{ env.PLATFORM_TOOLS_VERSION }} 2>&1 | tee /tmp/direct_sbf_build.log; then
+            echo "✅ Direct cargo-build-sbf with --tools-version SUCCEEDED"
+          else
+            echo "⚠️  Direct cargo-build-sbf FAILED — falling back to anchor build"
+            anchor build
+          fi
 
       - name: Deploy to devnet
         if: steps.prereq.outputs.skip == 'false'
