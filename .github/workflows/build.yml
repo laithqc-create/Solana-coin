@@ -145,14 +145,23 @@ jobs:
           #     this attempt is loudly verified against the actual resolved
           #     lockfile entry — never silently trusted again (Rule 8).
           cargo update -p indexmap --precise 2.2.6 2>&1 | tee /tmp/indexmap_pin.log || true
+          echo "───────────── FULL cargo update output (indexmap pin attempt) ─────────────"
+          cat /tmp/indexmap_pin.log
+          echo "─────────────────────────────────────────────────────────────────────────"
           RESOLVED_INDEXMAP=$(grep -A1 'name = "indexmap"' Cargo.lock | grep '^version' | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
           echo "ℹ️  indexmap resolved to: ${RESOLVED_INDEXMAP:-<not found in lockfile>}"
           if [ "$RESOLVED_INDEXMAP" != "2.2.6" ]; then
             echo "⚠️  Pin to 2.2.6 did NOT take effect (resolved: $RESOLVED_INDEXMAP)."
+            echo "⚠️  See the FULL cargo update output printed above for cargo's own"
+            echo "⚠️  explanation of what's forcing a newer floor — check for lines like"
+            echo "⚠️  'package X requires indexmap ^Y.Z' rather than guessing again."
             echo "⚠️  Falling back to source-patch safety net (Layer 4c/4d below)."
           else
             echo "✅ indexmap pin confirmed: 2.2.6"
           fi
+          echo "───────────── cargo tree -i indexmap (who depends on it, and why) ─────────────"
+          cargo tree -i indexmap --edges normal 2>&1 || echo "(cargo tree failed — non-fatal, informational only)"
+          echo "─────────────────────────────────────────────────────────────────────────────"
 
           # 2. Vendor (captures whatever actually got resolved above, pinned
           #    or not — source patches below remain as a safety net either way)
@@ -286,45 +295,19 @@ jobs:
           echo "✅ Bundled cargo will read pre-patched sources from vendor/ (no downloads)"
 
       # ── Build SBF ─────────────────────────────────────────────────────────
-      # STRATEGY CHANGE (fix #19): source-patching hit a real structural limit
-      # — indexmap's latest version needs dozens of deep const-fn/API features
-      # (const_mut_refs, split_at_checked, is_sorted, etc.), not just a few
-      # isolated syntax constructs. Continuing to patch line-by-line is no
-      # longer sustainable (Rule 7). Reverting to root cause: get a genuinely
-      # modern rustc onto the SBF compile path.
-      #
-      # --tools-version panicked twice before (fix #8, on two different Solana
-      # CLI versions) when invoked as 'anchor build -- --tools-version v1.54'.
-      # Verified via primary source (github.com/anza-xyz/platform-tools/releases)
-      # that 'v1.54' is the CORRECT tag format — the panic wasn't a malformed
-      # tag. This attempt calls cargo-build-sbf DIRECTLY, bypassing Anchor's
-      # build wrapper entirely, to get unambiguous evidence on whether the
-      # flag itself works or whether Anchor's argument-forwarding was the
-      # actual problem. Falls back to plain 'anchor build' (all our patches
-      # still in place as a safety net) if the direct call also fails.
-      - name: Build smart contract (try direct cargo-build-sbf with modern tools first)
+      # --tools-version CONFIRMED BROKEN (fix #20): panics identically whether
+      # called via 'anchor build -- --tools-version' (fix #8) OR cargo-build-sbf
+      # directly (fix #19) — same exact panic both times. This is not an Anchor
+      # wrapper issue; the flag itself is non-functional in this environment
+      # regardless of invocation method. Abandoned for good — real evidence,
+      # not a guess this time. (Also: fix #19's own if/tee logic had a bug —
+      # piping through tee makes bash's `if` check tee's exit code, not cargo's,
+      # so the "SUCCEEDED" message was always misleading regardless.)
+      - name: Build smart contract (anchor build → SBF bytecode)
         working-directory: ./ecosystem-token
         run: |
-          echo "=== Attempt 1: cargo build-sbf --tools-version ${{ env.PLATFORM_TOOLS_VERSION }} (direct, bypassing anchor build wrapper) ==="
-          if cargo build-sbf \
-              --manifest-path programs/ecosystem-token/Cargo.toml \
-              --tools-version ${{ env.PLATFORM_TOOLS_VERSION }} \
-              2>&1 | tee /tmp/direct_sbf_build.log; then
-            echo "✅ Direct cargo-build-sbf with --tools-version SUCCEEDED"
-            echo "DIRECT_BUILD_OK=true" >> "$GITHUB_ENV"
-          else
-            echo "⚠️  Direct cargo-build-sbf with --tools-version FAILED (see log above)"
-            echo "DIRECT_BUILD_OK=false" >> "$GITHUB_ENV"
-          fi
-
-          if [ "$DIRECT_BUILD_OK" != "true" ]; then
-            echo "=== Falling back to: anchor build (patched vendor/ sources, default toolchain) ==="
-            anchor build
-            echo "✅ Fallback anchor build complete"
-          else
-            echo "ℹ️  Skipping anchor build — direct cargo-build-sbf already produced the .so"
-            echo "ℹ️  IDL generation (anchor build's other job) may still be needed separately — non-fatal if missing, see next steps"
-          fi
+          anchor build
+          echo "✅ SBF build complete"
 
       # ── Validate output ───────────────────────────────────────────────────
       - name: Validate SBF output
@@ -537,12 +520,7 @@ jobs:
             > /tmp/fix_vendor_checksums.py
           python3 /tmp/fix_vendor_checksums.py
           echo "✅ Patched manifests + hashbrown source, checksums fixed"
-          if cargo build-sbf --manifest-path programs/ecosystem-token/Cargo.toml --tools-version ${{ env.PLATFORM_TOOLS_VERSION }} 2>&1 | tee /tmp/direct_sbf_build.log; then
-            echo "✅ Direct cargo-build-sbf with --tools-version SUCCEEDED"
-          else
-            echo "⚠️  Direct cargo-build-sbf FAILED — falling back to anchor build"
-            anchor build
-          fi
+          anchor build
 
       - name: Deploy to devnet
         if: steps.prereq.outputs.skip == 'false'
