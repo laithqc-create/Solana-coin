@@ -420,3 +420,33 @@ Look for: `ℹ️  indexmap resolved to: X.X.X`
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #19)
+
+### Fix #19 applied (commit `708dc9d`)
+**Error:** indexmap pin (fix #18) failed again — 40+ deep structural errors this round (const_mut_refs used pervasively across map/slice.rs, split_at_checked, is_sorted_by, plus a regression from fix #17's own use<> stripping causing E0700 lifetime-capture errors). Confirms source-patching indexmap has hit a real, unsustainable structural limit.
+
+**Strategy change (back to root cause):** Reverted to getting a genuinely modern rustc onto the SBF compile path. `--tools-version` panicked twice before (fix #8) but ALWAYS via `anchor build -- --tools-version v1.54` — never tested calling `cargo-build-sbf` directly. Verified `v1.54` is the correct tag format via primary source (`github.com/anza-xyz/platform-tools/releases`) — the prior panics were never actually root-caused to the flag itself vs. Anchor's argument-forwarding.
+
+**This fix:** calls `cargo build-sbf --tools-version v1.54` directly, bypassing `anchor build`'s wrapper, with automatic fallback to the existing patched `anchor build` path if it fails. This is a **safe, no-regression change** — if the direct call fails, behavior is identical to before this commit (all Layer 1-4 patches still in place as a safety net).
+
+### Status: AWAITING NEXT CI RESULT (run in progress as of this checkpoint) — KEY DIAGNOSTIC
+**Look for this in the CI log:**
+- `✅ Direct cargo-build-sbf with --tools-version SUCCEEDED` → Anchor's wrapper was the problem all along; we now have a working modern-rustc path. Fixes #12-#18's source patches likely become unnecessary going forward (safe to leave in place, harmless under a newer compiler) — but don't rush to remove them without confirming green build first.
+- `⚠️ Direct cargo-build-sbf with --tools-version FAILED` → the flag is confirmed broken regardless of invocation method. Check the tee'd `/tmp/direct_sbf_build.log` content in the CI log for the actual failure reason (may not be the same "Os NotFound" panic as before — could be a different, more informative error this time since we're calling it in isolation).
+
+Full fix chain (19 fixes): `377c0b2`→`cdd9997`→`f74b675`→`9747eac`→`bdbf9cf`→`8804808`→`ce1a38d`→`f68caab`→`23d46c5`→`04bf108`→`5b818fa`→`bb92c2c`→`65c8007`→`e883bcf`→`f7b3d3e`→`6cff57d`→`b990312`→`d587d96`→`dec63e9`→`444d11c`→`7613729`→`f287c5b`(docs)→`708dc9d`
+
+### If direct cargo-build-sbf succeeds
+Next steps: confirm .so validates (existing check), confirm test job still passes, then consider whether IDL generation needs a separate step (currently non-fatal if missing — `anchor build`'s IDL generation wasn't replicated in the direct-call path). Also worth checking if the const_mut_refs/use<>/hashbrown source patches can eventually be removed for cleanliness once confirmed unnecessary — not urgent.
+
+### If direct cargo-build-sbf fails
+This closes the --tools-version path for good with real evidence. Next path would be: either accept needing a genuinely newer default-bundled platform-tools (would require researching which Solana CLI version ships one by default, primary-source verified, not guessed), or continue the indexmap pin approach but dig into WHY 2.2.6 doesn't satisfy the graph (would need `cargo tree -i indexmap` output, which requires either a Rust toolchain locally/in Codespaces, or adding a diagnostic CI step that runs `cargo tree` and dumps it to the log for us to read next round).
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
