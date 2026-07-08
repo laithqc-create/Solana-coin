@@ -482,3 +482,29 @@ Full fix chain (20 fixes): `377c0b2`→`cdd9997`→`f74b675`→`9747eac`→`bdbf
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #21)
+
+### Fix #21 applied (commit `b0f4a24`)
+**Problem:** post-hoc `cargo update -p indexmap --precise 2.2.6` (fixes #15, #18) never took effect across multiple CI rounds — indexmap kept resolving to 2.14.0. Diagnostic output added in fix #20 was buried in a successful, collapsed CI step, making it slow to retrieve the actual conflict reason.
+
+**Real fix this time:** declared `indexmap = "=2.2.6"` as an **explicit direct dependency** in `ecosystem-token/programs/ecosystem-token/Cargo.toml` itself (not used directly by our code — purely a version-forcing declaration, standard Cargo technique). This changes enforcement: instead of a post-hoc `cargo update` hoping to retroactively force a version, our own crate now has a first-class hard requirement. `cargo generate-lockfile` (no `|| true`) will either satisfy it or fail immediately with cargo's own explicit conflict message at the top of the log — impossible to miss this time.
+
+**Verified before pushing:** Cargo.toml is valid TOML (via Python `tomllib`), dependency correctly declared. YAML validated.
+
+### Status: AWAITING NEXT CI RESULT — should be the definitive answer
+**Two possible outcomes:**
+1. **`cargo generate-lockfile` succeeds** → indexmap 2.2.6 resolved cleanly across the whole graph, all the const_mut_refs/use<>/etc. errors should vanish since that old version predates all of them. This would very plausibly get us to a green build.
+2. **`cargo generate-lockfile` FAILS immediately** → cargo will print an explicit, specific conflict message (e.g. "package X requires indexmap ^2.7") right at the top of the vendor step's log — this is the real, definitive answer we've been trying to get for 3+ rounds. Whatever crate it names becomes the next thing to pin/investigate.
+
+Either way, this round should be much more informative than previous ones.
+
+Full fix chain (21 fixes): `377c0b2`→`cdd9997`→`f74b675`→`9747eac`→`bdbf9cf`→`8804808`→`ce1a38d`→`f68caab`→`23d46c5`→`04bf108`→`5b818fa`→`bb92c2c`→`65c8007`→`e883bcf`→`f7b3d3e`→`6cff57d`→`b990312`→`d587d96`→`dec63e9`→`444d11c`→`7613729`→`f287c5b`→`708dc9d`→`dce615d`→`7b05acf`→`49acc6d`(docs)→`b0f4a24`
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
