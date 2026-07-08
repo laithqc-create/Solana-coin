@@ -508,3 +508,36 @@ Full fix chain (21 fixes): `377c0b2`→`cdd9997`→`f74b675`→`9747eac`→`bdbf
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #22)
+
+### 🎉 Fix #21 CONFIRMED WORKING
+The direct-Cargo.toml pin for `indexmap = "=2.2.6"` worked — no more indexmap errors in the latest CI run. This confirms the **correct, reliable fix pattern**: declare an explicit, unused direct dependency in `ecosystem-token/programs/ecosystem-token/Cargo.toml` to force cargo's resolver, rather than post-hoc `cargo update --precise` (which never reliably worked across fixes #15 and #18).
+
+**Use this pattern for any future crate hitting the same "too-new-for-bundled-rustc" issue:**
+```toml
+crate-name = "=X.Y.Z"  # add to [dependencies], not used directly by our code
+```
+If the pinned version doesn't satisfy the graph, `cargo generate-lockfile` (no `|| true`) fails immediately with cargo's own explicit conflict message.
+
+### Fix #22 applied (commit `8ee9e3b`)
+**New crate hit the wall:** `hybrid-array` (RustCrypto const-generic array crate, pulled in via crypto-common/aead/digest, used by aes-gcm-siv). 33 errors — `const_slice_from_raw_parts_mut`, E0005.
+
+**Verified via crates.io (primary source):** latest hybrid-array (0.4.13) requires rustc ≥1.85; its own docs explicitly warn "MSRV increases are not considered breaking changes and can happen in patch releases" — same risk pattern as ctutils/toml_parser.
+
+**Fix:** pinned `hybrid-array = "=0.2.3"` using the now-proven direct-Cargo.toml mechanism.
+
+### Status: AWAITING NEXT CI RESULT
+Two outcomes:
+1. Pin resolves cleanly → hybrid-array errors vanish, move to whatever's next (if anything)
+2. Pin conflicts → `cargo generate-lockfile` fails immediately with an explicit reason, visible right away
+
+Full fix chain (22 fixes): `377c0b2`→...→`b0f4a24`→`0de341a`(docs)→`8ee9e3b`
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
