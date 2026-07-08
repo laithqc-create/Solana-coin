@@ -260,6 +260,24 @@ jobs:
               vendor/indexmap/src/inner.rs 2>/dev/null || true
             echo "✅ Patched indexmap-specific: size_of qualified to core::mem::size_of"
           fi
+          if [ -d vendor/hybrid-array ]; then
+            # Fix #24: hybrid-array's own docs warn "MSRV increases are not
+            # considered breaking changes and can happen in patch releases" —
+            # confirmed in practice across 3 rounds (fixes #22, #23, #24), each
+            # hitting a DIFFERENT unstable const-eval feature (const_mut_refs,
+            # const_slice_from_raw_parts_mut, const_option) in the same crate.
+            # Enumerating each one individually is an unbounded whack-a-mole
+            # for a crate whose entire design centers on const generics.
+            # Blanket fix: demote EVERY const fn in hybrid-array to plain fn.
+            # Scoped ONLY to this crate (not vendor-wide) since other crates'
+            # const fns may be load-bearing; here, we don't call into
+            # hybrid-array's internals directly (deep transitive dep via
+            # aes-gcm-siv/ed25519-dalek-bip32 for HD wallet derivation, which
+            # an on-chain program doesn't exercise), so losing const-eval
+            # capability on these functions has no real effect for us.
+            find vendor/hybrid-array -name "*.rs" -exec sed -i -E 's/const fn /fn /g' {} \;
+            echo "✅ Patched hybrid-array: ALL const fn -> fn (blanket, ends the per-feature whack-a-mole)"
+          fi
 
           # 5. Recompute .cargo-checksum.json for EVERY file in EVERY vendored
           #    crate (generalized from Cargo.toml-only, since we now also patch
@@ -496,6 +514,9 @@ jobs:
           fi
           if [ -d vendor/indexmap ]; then
             sed -i 's#/ size_of::<Bucket<K, V>>()#/ core::mem::size_of::<Bucket<K, V>>()#' vendor/indexmap/src/inner.rs 2>/dev/null || true
+          fi
+          if [ -d vendor/hybrid-array ]; then
+            find vendor/hybrid-array -name "*.rs" -exec sed -i -E 's/const fn /fn /g' {} \;
           fi
           printf '%s\n' \
             'import hashlib, json, pathlib' \
