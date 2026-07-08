@@ -566,3 +566,30 @@ Consider: (a) check the E0005 error type specifically (not yet analyzed — like
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #24)
+
+### Fix #24 applied (commit `ca964f7`)
+**Great progress:** down to just 2 errors (from 33) after fix #23's broadened pattern. Remaining 2 hit a THIRD distinct unstable-const-eval feature: `const_option` (Option::unwrap in const fn).
+
+**Pattern recognized:** 3 consecutive rounds, 3 different unstable const-eval features, all in `hybrid-array` alone — confirms this crate's core design is fundamentally const-generics-heavy throughout, matching its own documented MSRV warning. Per-feature patching is unbounded for this specific crate.
+
+**Decisive fix:** blanket-demoted **every** `const fn` in `vendor/hybrid-array` to plain `fn` in one pass — scoped only to this crate (other crates' const fns may be load-bearing). Safe because we don't call into hybrid-array's internals directly (deep transitive dep via aes-gcm-siv/ed25519-dalek-bip32 for HD wallet derivation, irrelevant to on-chain program execution).
+
+**Verified locally before pushing:** confirmed uniform demotion works correctly, no `{}` collision, YAML valid.
+
+### Status: AWAITING NEXT CI RESULT — should be the end of hybrid-array issues
+This blanket approach should eliminate ALL remaining hybrid-array const-eval errors in one shot, regardless of which specific unstable feature each one uses.
+
+Full fix chain (24 fixes): `377c0b2`→...→`26ac868`→`16e5be8`(docs)→`ca964f7`
+
+### If hybrid-array is finally clean, watch for:
+Whatever crate compiles next after hybrid-array in the log — if the build proceeds past it cleanly, we may be very close to a green build. If a new crate surfaces, apply the same evidence-based approach: check crates.io for the crate's version/MSRV history before picking a pin target, and prefer the direct-Cargo.toml-pin mechanism (proven reliable, fix #21) over post-hoc cargo update.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
