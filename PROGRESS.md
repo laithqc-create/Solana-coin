@@ -541,3 +541,28 @@ Full fix chain (22 fixes): `377c0b2`→...→`b0f4a24`→`0de341a`(docs)→`8ee9
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #23)
+
+### Fix #23 applied (commit `26ac868`)
+**Same hybrid-array errors persisted** even after pinning to `=0.2.3` (fix #22) — exact same line numbers (516, 528, 530). Root cause identified: our const-fn-demotion patch (fix #18) only matched `const fn NAME(&mut self)`, but hybrid-array's affected functions take `&mut` as a **named parameter** instead: `pub const fn cast_slice_to_core_mut(slice: &mut [Self])`. Never matched.
+
+**Fix:** broadened the sed pattern from matching `&mut self` specifically to matching **any line containing both `const fn` and `&mut`** anywhere on it. Strictly more general — still catches old cases, now also catches parameter-based `&mut`. Should also resolve the related `from_raw_parts_mut is not yet stable as const fn` errors as a side effect (that restriction only applies inside actual const-eval context).
+
+**Verified locally before pushing:** tested against the exact error lines from the CI paste — all 3 const-mut-fn signatures correctly demoted, unrelated const fns untouched. Confirmed no `find -exec {}` collision. YAML validated.
+
+**Open question carried forward:** whether hybrid-array's MSRV warning ("bumps can happen in any patch release") means NO version is safely pinnable — if source-patching this round doesn't fully resolve it, may need to investigate whether hybrid-array can be avoided entirely (e.g., it's likely pulled in transitively via `ed25519-dalek-bip32`/`aes-gcm-siv` for HD wallet key derivation — functionality an on-chain Solana program almost certainly doesn't need at runtime, just an unnecessary transitive dependency from the SDK).
+
+### Status: AWAITING NEXT CI RESULT
+Full fix chain (23 fixes): `377c0b2`→...→`8ee9e3b`→`0d54d73`(docs)→`26ac868`
+
+### If hybrid-array errors persist even after this broadened patch
+Consider: (a) check the E0005 error type specifically (not yet analyzed — likely a match-exhaustiveness issue related to the same functions, may resolve as side-effect or may need separate handling), (b) investigate whether hybrid-array can be excluded from the dependency tree entirely by disabling whatever feature pulls in ed25519-dalek-bip32/aes-gcm-siv, since on-chain programs don't do local keypair derivation.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
