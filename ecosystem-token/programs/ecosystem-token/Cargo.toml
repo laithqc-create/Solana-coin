@@ -13,6 +13,18 @@ anchor-spl = { workspace = true }
 spl-token = { workspace = true }
 spl-associated-token-account = { workspace = true }
 rust_decimal = { workspace = true }
+# Explicit direct pin (Session 9, fix #21) — NOT used directly by our code.
+# indexmap is a transitive dependency (pulled in via anchor-lang/anchor-spl's
+# own dependency tree) whose latest releases (2.14.0+) require const_mut_refs,
+# split_at_checked, and other rustc features not supported by Solana's bundled
+# platform-tools compiler. Post-hoc 'cargo update --precise 2.2.6' (fixes #15,
+# #18) never took effect — CI kept resolving 2.14.0 regardless, with no clear
+# error explaining why. Declaring the pin HERE, as a real dependency of our own
+# crate, forces cargo's resolver to either satisfy =2.2.6 across the whole
+# graph (fixing the issue) or fail cargo generate-lockfile with an explicit,
+# unmissable conflict message naming whatever actually requires a newer
+# version — replacing silent failure with a real, actionable error either way.
+indexmap = "=2.2.6"
 
 [features]
 no-entrypoint = []

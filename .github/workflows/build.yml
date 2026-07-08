@@ -128,22 +128,19 @@ jobs:
       - name: Vendor deps, patch manifests, and patch hashbrown source for bundled cargo
         working-directory: ./ecosystem-token
         run: |
-          # 1. Resolve full graph
+          # 1. Resolve full graph. Since ecosystem_token's own Cargo.toml now
+          #    declares 'indexmap = "=2.2.6"' directly (fix #21), THIS is
+          #    where the real pin takes effect — cargo must either satisfy
+          #    =2.2.6 across the whole graph right now, or fail HERE with an
+          #    explicit, unmissable resolver conflict naming whatever actually
+          #    requires a newer version. No more silent failures (Rule 8):
+          #    this command has no '|| true', so a real conflict stops the
+          #    step immediately with cargo's own explanation at the very top
+          #    of the log — impossible to miss or bury in a collapsed step.
           cargo generate-lockfile
 
-          # 1b. Pin indexmap to an old, stable, syntax-safe version BEFORE
-          #     vendoring. indexmap's latest releases have required an
-          #     escalating series of newer-rustc-only syntax across three
-          #     consecutive CI rounds (use<> bounds, prelude size_of, and now
-          #     const fn + mutable refs / const_mut_refs, stabilized Rust
-          #     1.83) — patching it source-line-by-line is an expanding
-          #     target, not a stable fix. Pinning to an old release avoids
-          #     the whole category at once.
-          #
-          #     UNLIKE fix #15's silent '|| echo skip' (which masked a failed
-          #     hashbrown pin for two entire CI rounds before being caught),
-          #     this attempt is loudly verified against the actual resolved
-          #     lockfile entry — never silently trusted again (Rule 8).
+          # 1b. Verification only (the Cargo.toml pin above is now the real
+          #     fix). Kept as a redundant sanity check + diagnostic output.
           cargo update -p indexmap --precise 2.2.6 2>&1 | tee /tmp/indexmap_pin.log || true
           echo "───────────── FULL cargo update output (indexmap pin attempt) ─────────────"
           cat /tmp/indexmap_pin.log
@@ -151,11 +148,9 @@ jobs:
           RESOLVED_INDEXMAP=$(grep -A1 'name = "indexmap"' Cargo.lock | grep '^version' | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
           echo "ℹ️  indexmap resolved to: ${RESOLVED_INDEXMAP:-<not found in lockfile>}"
           if [ "$RESOLVED_INDEXMAP" != "2.2.6" ]; then
-            echo "⚠️  Pin to 2.2.6 did NOT take effect (resolved: $RESOLVED_INDEXMAP)."
-            echo "⚠️  See the FULL cargo update output printed above for cargo's own"
-            echo "⚠️  explanation of what's forcing a newer floor — check for lines like"
-            echo "⚠️  'package X requires indexmap ^Y.Z' rather than guessing again."
-            echo "⚠️  Falling back to source-patch safety net (Layer 4c/4d below)."
+            echo "⚠️  Still not 2.2.6 (resolved: $RESOLVED_INDEXMAP) despite the Cargo.toml"
+            echo "⚠️  pin — this would be unexpected given generate-lockfile above already"
+            echo "⚠️  enforces =2.2.6. Falling back to source-patch safety net (Layer 4c/4d)."
           else
             echo "✅ indexmap pin confirmed: 2.2.6"
           fi
