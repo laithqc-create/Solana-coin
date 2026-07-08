@@ -214,15 +214,23 @@ jobs:
           #     unparseable syntax expressing something already implied.
           find vendor/ -name "*.rs" -exec sed -i 's/ + use<[^>]*>//g' {} \;
 
-          #     const fn (...&mut self...) -> mutable refs in const fn
-          #     (stabilized Rust 1.83, issue #57349) -> demoted to plain fn.
-          #     A function returning &mut references can't meaningfully be
-          #     invoked in a const-evaluation context anyway (mutable
-          #     borrows aren't const-evaluable in practice), so dropping the
-          #     'const' qualifier is behaviorally safe for all realistic call
-          #     sites — it only removes an optimization hint that can't
-          #     apply here on the older rustc regardless.
-          find vendor/ -name "*.rs" -exec sed -i -E 's/^(\s*)const fn (\w+)\(&mut self\)/\1fn \2(\&mut self)/' {} \;
+          #     const fn ... &mut ... -> mutable refs in const fn (stabilized
+          #     Rust 1.83, issue #57349) -> demoted to plain fn. Broadened
+          #     from '&mut self'-only (fix #18) to ANY line containing both
+          #     'const fn' and '&mut' — the narrower pattern missed
+          #     hybrid-array's 'const fn NAME(slice: &mut [Self])' forms
+          #     (fix #22/23: hybrid-array uses &mut PARAMETERS, not &mut self,
+          #     for its slice-casting helpers). A function taking/returning
+          #     &mut references can't meaningfully be invoked in a const-
+          #     evaluation context anyway, so dropping 'const' is safe for all
+          #     realistic call sites. This also incidentally resolves the
+          #     related 'core::slice::from_raw_parts_mut is not yet stable as
+          #     a const fn' errors, since that restriction only applies
+          #     inside an actual const-evaluated context — once the enclosing
+          #     fn is no longer 'const', the restriction no longer applies.
+          #     Verified locally against hybrid-array's exact error lines
+          #     before pushing (Rule 8).
+          find vendor/ -name "*.rs" -exec sed -i -E '/&mut/ s/const fn/fn/' {} \;
 
           echo "✅ Vendor-wide: #[expect]→#[allow], error_in_core impls removed, use<> bounds stripped, const-mut-fn demoted"
 
@@ -478,7 +486,7 @@ jobs:
             sed -i '/^impl core::error::Error for [A-Za-z_][A-Za-z0-9_]* {}$/d' "$rsfile"
           done
           find vendor/ -name "*.rs" -exec sed -i 's/ + use<[^>]*>//g' {} \;
-          find vendor/ -name "*.rs" -exec sed -i -E 's/^(\s*)const fn (\w+)\(&mut self\)/\1fn \2(\&mut self)/' {} \;
+          find vendor/ -name "*.rs" -exec sed -i -E '/&mut/ s/const fn/fn/' {} \;
           if [ -d vendor/hashbrown ]; then
             HB=vendor/hashbrown/src
             sed -i 's/ptr::read(&raw const self\.alloc)/ptr::read((\&self.alloc) as *const _)/' "$HB/raw.rs" 2>/dev/null || true
