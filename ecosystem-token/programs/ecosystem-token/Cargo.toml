@@ -25,6 +25,15 @@ rust_decimal = { workspace = true }
 # unmissable conflict message naming whatever actually requires a newer
 # version — replacing silent failure with a real, actionable error either way.
 indexmap = "=2.2.6"
+# Same technique, same reason (Session 9, fix #22): hybrid-array is a
+# RustCrypto transitive dependency (pulled in via crypto-common/aead/digest's
+# own tree, used by aes-gcm-siv etc.) whose latest releases (0.4.13+) require
+# rustc >=1.85 and const_slice_from_raw_parts_mut — unsupported by Solana's
+# bundled platform-tools compiler. hybrid-array's own docs explicitly warn
+# "MSRV increases are not considered breaking changes and can happen in
+# patch releases" — same escalating-MSRV risk pattern seen in ctutils/toml_parser.
+# Pinned to an early 0.x release, well before the const-generics-heavy rewrite.
+hybrid-array = "=0.2.3"
 
 [features]
 no-entrypoint = []
