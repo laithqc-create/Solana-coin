@@ -623,3 +623,35 @@ This session has been unusually long (25+ CI fix iterations) due to a structural
 
 ### If this is the last CI attempt for now (per user's stated fallback)
 Next session should pivot to: Telegram Mini App details + Supabase project details (both still fully pending user input), and treat full CI-green as a parallel, non-blocking effort to revisit once those are further along.
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #26)
+
+### 🎉 hybrid-array CONFIRMED FIXED
+Compiled clean at v0.4.13 — fixes #22-25 all worked together (pin, const-fn demotion, let-else patch).
+
+### Fix #26 applied (commit `e1ed3c6`)
+**New crate:** `cmov v0.5.4` — same familiar categories: ~25 bare `size_of`/`align_of`/`size_of_val` call sites (edition2024 prelude reliance) + 1 `&raw const` occurrence.
+
+**Fix:** Generalized the size_of/align_of fix from indexmap's single-call-site inline qualification to a vendor-wide scan-and-insert-import approach (too many call sites in cmov for inline qualification to scale).
+
+**2 real bugs caught via local testing before pushing (Rule 8) — exactly what "run rust check" was getting at:**
+1. Regex initially required `size_of(` directly, but real usage is `size_of::<Word>()` (turbofish between name and parens) — fixed.
+2. Import insertion must respect Rust's rule that `#![...]` inner attributes must be first in a file — verified insertion correctly walks past them.
+
+Also caught and fixed a **dangling-fragment editing mistake** (deploy-devnet's checksum script had its opening lines accidentally cut during a previous edit) — caught by re-reading the file before pushing, not just trusting the diff.
+
+**Verified end-to-end:** reconstructed the EXACT printf-generated script (not just the underlying logic) and ran it against a realistic mock `vendor/` tree with 3 test cases. YAML validated.
+
+### Status: AWAITING NEXT CI RESULT
+Full fix chain (26 fixes): `377c0b2`→...→`a3a962f`→`35687a3`(docs)→`e1ed3c6`
+
+### Context: on the "why so many attempts" question
+User asked directly why this has taken 25+ rounds and whether it's a Rust-specific problem. Answered: it's a structural mismatch between Solana's deliberately-pinned on-chain compiler and crates.io's constantly-updated transitive dependencies (RustCrypto crates especially) — a known, documented pain point in the Solana ecosystem, not a sign of anything wrong with the contract. Some of the iteration count is my own mistakes (tee/pipe bugs, find {} collision, editing fragments) which local testing has been catching more of recently. **Agreed fallback plan with user:** if CI doesn't go green soon, pivot to other development (Telegram Mini App / Supabase) and treat full CI-green as a parallel, revisitable effort.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
