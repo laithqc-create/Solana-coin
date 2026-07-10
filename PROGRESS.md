@@ -593,3 +593,33 @@ Whatever crate compiles next after hybrid-array in the log — if the build proc
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #25)
+
+### Fix #25 applied (commit `a3a962f`) — last hybrid-array error
+**Down to the final error:** E0005 refutable pattern — `let Ok(ret) = Self::try_from_fn::<Infallible>(...);` without an else branch. Different error class than the prior 3 rounds (those were const-fn eval restrictions; this is an exhaustiveness-checking gap where older rustc can't infer that `Infallible` makes the Err variant statically impossible).
+
+**Fix:** Applied rustc's own suggested fix verbatim — added `else { unreachable!() }`.
+
+**Agreed fallback plan (per user):** if this specific fix doesn't fully clear it, we move on to other development work (Telegram Mini App / Supabase) and defer full CI-green verification until the project is more complete, rather than continuing indefinitely on this one crate.
+
+**Verified locally before pushing:** tested exact sed substitution, confirmed no `{}` collision (braces here contain `unreachable!()`, not an empty pair). YAML validated.
+
+### Status: AWAITING NEXT CI RESULT
+If hybrid-array is finally clean, watch for what compiles next — may be very close to green.
+
+Full fix chain (25 fixes): `377c0b2`→...→`ca964f7`→`ab873c8`(docs)→`a3a962f`
+
+### Context note for next session
+This session has been unusually long (25+ CI fix iterations) due to a structural mismatch: Solana's pinned on-chain compiler vs. crates.io's constantly-updated transitive dependencies (RustCrypto crates especially). This is a documented, known pain point in the Solana ecosystem, not a sign of anything wrong with the contract itself. Established reliable technique: pin problem crates directly in `ecosystem-token/programs/ecosystem-token/Cargo.toml` (not post-hoc `cargo update`), and for crates whose entire design is const-generics-heavy (like hybrid-array), blanket-demoting `const fn` → `fn` is more efficient than chasing individual unstable features one at a time.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+### If this is the last CI attempt for now (per user's stated fallback)
+Next session should pivot to: Telegram Mini App details + Supabase project details (both still fully pending user input), and treat full CI-green as a parallel, non-blocking effort to revisit once those are further along.
