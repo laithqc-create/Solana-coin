@@ -289,6 +289,52 @@ jobs:
             echo "✅ Patched hybrid-array: let-else added for Infallible-guaranteed match"
           fi
 
+          # 4e. GENERALIZED (fix #26): bare size_of/align_of/size_of_val calls
+          #     relying on edition2024's expanded prelude auto-import. First
+          #     seen in indexmap (fix #17, one call site, qualified inline);
+          #     now recurring in cmov with ~25 call sites — too many for
+          #     individual qualification. Generalized to vendor-wide: insert
+          #     'use core::mem::{size_of, align_of, size_of_val};' into any
+          #     vendored file using these bare (unqualified by ::) identifiers
+          #     that doesn't already import them. Respects Rust's rule that
+          #     inner attributes (#![...]) must be the first items in a file —
+          #     inserts after any leading #![...] lines, not before them.
+          #     Verified locally (Rule 8) against synthetic files matching the
+          #     exact turbofish call shape (size_of::<T>()) before pushing.
+          printf '%s\n' \
+            'import re, pathlib' \
+            'bare_pat = re.compile(r"(?<!::)\b(size_of|align_of|size_of_val)\s*(::<[^>()]*>)?\s*\(")' \
+            'has_import_pat = re.compile(r"use\s+core::mem::(\{[^}]*(size_of|align_of)|(size_of|align_of)\b)")' \
+            'patched = 0' \
+            'for rf in pathlib.Path("vendor").rglob("*.rs"):' \
+            '    text = rf.read_text()' \
+            '    if not bare_pat.search(text) or has_import_pat.search(text):' \
+            '        continue' \
+            '    lines = text.split("\n")' \
+            '    insert_at = 0' \
+            '    for i, line in enumerate(lines):' \
+            '        s = line.strip()' \
+            '        if s.startswith("#!"):' \
+            '            insert_at = i + 1' \
+            '        elif s == "" or s.startswith("//"):' \
+            '            continue' \
+            '        else:' \
+            '            break' \
+            '    lines.insert(insert_at, "use core::mem::{size_of, align_of, size_of_val};")' \
+            '    rf.write_text("\n".join(lines))' \
+            '    patched += 1' \
+            'print(f"Inserted size_of/align_of/size_of_val import into {patched} vendored files")' \
+            > /tmp/fix_size_of_imports.py
+          python3 /tmp/fix_size_of_imports.py
+
+          # 4f. cmov-specific: &raw const (same hashbrown-style pattern, fix #16)
+          if [ -d vendor/cmov ]; then
+            sed -i \
+              's/\*(&raw const n)\.cast::<Self>()/*(\&n as *const _ as *const Self)/' \
+              vendor/cmov/src/lib.rs 2>/dev/null || true
+            echo "✅ Patched cmov-specific: &raw const replaced"
+          fi
+
           # 5. Recompute .cargo-checksum.json for EVERY file in EVERY vendored
           #    crate (generalized from Cargo.toml-only, since we now also patch
           #    .rs source files). cargo vendor verifies a SHA-256 per file before
@@ -530,6 +576,36 @@ jobs:
             find vendor/hybrid-array -name "*.rs" -exec sed -i \
               's/Self::try_from_fn::<Infallible>(|n| Ok(f(n)));/Self::try_from_fn::<Infallible>(|n| Ok(f(n))) else { unreachable!() };/' \
               {} \;
+          fi
+          printf '%s\n' \
+            'import re, pathlib' \
+            'bare_pat = re.compile(r"(?<!::)\b(size_of|align_of|size_of_val)\s*(::<[^>()]*>)?\s*\(")' \
+            'has_import_pat = re.compile(r"use\s+core::mem::(\{[^}]*(size_of|align_of)|(size_of|align_of)\b)")' \
+            'patched = 0' \
+            'for rf in pathlib.Path("vendor").rglob("*.rs"):' \
+            '    text = rf.read_text()' \
+            '    if not bare_pat.search(text) or has_import_pat.search(text):' \
+            '        continue' \
+            '    lines = text.split("\n")' \
+            '    insert_at = 0' \
+            '    for i, line in enumerate(lines):' \
+            '        s = line.strip()' \
+            '        if s.startswith("#!"):' \
+            '            insert_at = i + 1' \
+            '        elif s == "" or s.startswith("//"):' \
+            '            continue' \
+            '        else:' \
+            '            break' \
+            '    lines.insert(insert_at, "use core::mem::{size_of, align_of, size_of_val};")' \
+            '    rf.write_text("\n".join(lines))' \
+            '    patched += 1' \
+            'print(f"Inserted size_of/align_of/size_of_val import into {patched} vendored files")' \
+            > /tmp/fix_size_of_imports.py
+          python3 /tmp/fix_size_of_imports.py
+          if [ -d vendor/cmov ]; then
+            sed -i \
+              's/\*(&raw const n)\.cast::<Self>()/*(\&n as *const _ as *const Self)/' \
+              vendor/cmov/src/lib.rs 2>/dev/null || true
           fi
           printf '%s\n' \
             'import hashlib, json, pathlib' \
