@@ -335,6 +335,26 @@ jobs:
             echo "✅ Patched cmov-specific: &raw const replaced"
           fi
 
+          # 4g. libc-specific (fix #27): E0753 "expected outer doc comment" —
+          #     two auto-generated bindgen files place an inner doc comment
+          #     (//!, "documents the enclosing item") where an outer one
+          #     (///, "documents the next item") is expected in this position.
+          #     Purely a doc-comment style issue — doc comments are metadata
+          #     only and don't affect compiled behavior, so //! -> /// here is
+          #     zero-risk for our SBF binary. Matched by exact content (not
+          #     line number) since the real files have unknown leading lines
+          #     (license/generated-file headers) that shifted the line number
+          #     in a naive test — verified locally (Rule 8) before pushing.
+          if [ -d vendor/libc ]; then
+            sed -i \
+              's|^//! Header: `uapi/linux/can\.h`$|/// Header: `uapi/linux/can.h`|' \
+              vendor/libc/src/new/linux_uapi/linux/can.rs 2>/dev/null || true
+            sed -i \
+              's|^//! Linux-specific definitions for linux-like values$|/// Linux-specific definitions for linux-like values|' \
+              vendor/libc/src/unix/linux_like/linux/mod.rs 2>/dev/null || true
+            echo "✅ Patched libc-specific: 2 inner->outer doc comments"
+          fi
+
           # 5. Recompute .cargo-checksum.json for EVERY file in EVERY vendored
           #    crate (generalized from Cargo.toml-only, since we now also patch
           #    .rs source files). cargo vendor verifies a SHA-256 per file before
@@ -606,6 +626,14 @@ jobs:
             sed -i \
               's/\*(&raw const n)\.cast::<Self>()/*(\&n as *const _ as *const Self)/' \
               vendor/cmov/src/lib.rs 2>/dev/null || true
+          fi
+          if [ -d vendor/libc ]; then
+            sed -i \
+              's|^//! Header: `uapi/linux/can\.h`$|/// Header: `uapi/linux/can.h`|' \
+              vendor/libc/src/new/linux_uapi/linux/can.rs 2>/dev/null || true
+            sed -i \
+              's|^//! Linux-specific definitions for linux-like values$|/// Linux-specific definitions for linux-like values|' \
+              vendor/libc/src/unix/linux_like/linux/mod.rs 2>/dev/null || true
           fi
           printf '%s\n' \
             'import hashlib, json, pathlib' \
