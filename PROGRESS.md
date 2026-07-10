@@ -655,3 +655,29 @@ User asked directly why this has taken 25+ rounds and whether it's a Rust-specif
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #27)
+
+### 🎉 cmov CONFIRMED FIXED
+No more cmov errors this round — fix #26's generalized size_of import + raw-const patch worked.
+
+### Fix #27 applied (commit `8001160`)
+**New crate:** `libc` — E0753 "expected outer doc comment", 2 auto-generated bindgen files use `//!` (inner doc) where `///` (outer doc) is expected. Purely cosmetic (doc comments are metadata, zero effect on compiled binary).
+
+**Real bug caught via local testing (Rule 8):** initial line-number-anchored sed (`2s|...|`) silently matched the wrong line — my synthetic test didn't replicate whatever's on line 1 of the real file (likely a license header), causing a silent no-op. Switched to content-based matching (exact text, no line-number dependency).
+
+**Scoped narrowly:** only the 2 exact reported files/strings, NOT a vendor-wide rule — `//!` is the normal correct convention at the top of most files; a broad rule would incorrectly rewrite legitimate doc comments elsewhere.
+
+### Status: AWAITING NEXT CI RESULT
+Full fix chain (27 fixes): `377c0b2`→...→`2e768b4`(docs)→`8001160`
+
+### Running tally of confirmed-fixed crates
+hashbrown ✅, indexmap ✅, hybrid-array ✅, cmov ✅ — libc in progress. Build is progressing steadily through the dependency tree each round.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
