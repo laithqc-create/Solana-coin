@@ -276,7 +276,17 @@ jobs:
             # an on-chain program doesn't exercise), so losing const-eval
             # capability on these functions has no real effect for us.
             find vendor/hybrid-array -name "*.rs" -exec sed -i -E 's/const fn /fn /g' {} \;
-            echo "✅ Patched hybrid-array: ALL const fn -> fn (blanket, ends the per-feature whack-a-mole)"
+            # Fix #25: separate issue (E0005, not const-related) — older rustc
+            # can't prove 'let Ok(ret) = expr;' is irrefutable even when expr's
+            # Err variant is statically Infallible (a type-level guarantee
+            # newer rustc's exhaustiveness checker understands but older rustc
+            # doesn't infer automatically). Applied rustc's own suggested fix
+            # verbatim: add an explicit 'else { unreachable!() }' — correct
+            # here since Infallible makes that branch provably unreachable.
+            find vendor/hybrid-array -name "*.rs" -exec sed -i \
+              's/Self::try_from_fn::<Infallible>(|n| Ok(f(n)));/Self::try_from_fn::<Infallible>(|n| Ok(f(n))) else { unreachable!() };/' \
+              {} \;
+            echo "✅ Patched hybrid-array: let-else added for Infallible-guaranteed match"
           fi
 
           # 5. Recompute .cargo-checksum.json for EVERY file in EVERY vendored
@@ -517,6 +527,9 @@ jobs:
           fi
           if [ -d vendor/hybrid-array ]; then
             find vendor/hybrid-array -name "*.rs" -exec sed -i -E 's/const fn /fn /g' {} \;
+            find vendor/hybrid-array -name "*.rs" -exec sed -i \
+              's/Self::try_from_fn::<Infallible>(|n| Ok(f(n)));/Self::try_from_fn::<Infallible>(|n| Ok(f(n))) else { unreachable!() };/' \
+              {} \;
           fi
           printf '%s\n' \
             'import hashlib, json, pathlib' \
