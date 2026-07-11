@@ -288,6 +288,21 @@ jobs:
               {} \;
             echo "✅ Patched hybrid-array: let-else added for Infallible-guaranteed match"
           fi
+          if [ -d vendor/ctutils ]; then
+            # Fix #29: ctutils is the ORIGINAL crate that started this entire
+            # toolchain saga (fix #8) — a RustCrypto constant-time utility
+            # crate, same category as hybrid-array: const generics/interior
+            # mutability throughout. Same blanket fix, same reasoning (fix
+            # #24): demote every const fn to plain fn, scoped only to this
+            # crate. We don't call into ctutils' internals directly (deep
+            # transitive dep via the RustCrypto digest/crypto-common chain),
+            # so losing const-evaluability has no real effect for us.
+            # Verified locally against ctutils' exact reported lines
+            # (ct_option.rs:147 interior-mutability borrow, :546 const_mut_refs)
+            # before pushing (Rule 8).
+            find vendor/ctutils -name "*.rs" -exec sed -i -E 's/const fn /fn /g' {} \;
+            echo "✅ Patched ctutils: ALL const fn -> fn (same blanket pattern as hybrid-array)"
+          fi
 
           # 4e. GENERALIZED (fix #26): bare size_of/align_of/size_of_val calls
           #     relying on edition2024's expanded prelude auto-import. First
@@ -622,6 +637,9 @@ jobs:
             find vendor/hybrid-array -name "*.rs" -exec sed -i \
               's/Self::try_from_fn::<Infallible>(|n| Ok(f(n)));/Self::try_from_fn::<Infallible>(|n| Ok(f(n))) else { unreachable!() };/' \
               {} \;
+          fi
+          if [ -d vendor/ctutils ]; then
+            find vendor/ctutils -name "*.rs" -exec sed -i -E 's/const fn /fn /g' {} \;
           fi
           printf '%s\n' \
             'import re, pathlib' \
