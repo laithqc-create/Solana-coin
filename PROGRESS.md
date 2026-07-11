@@ -681,3 +681,29 @@ hashbrown ✅, indexmap ✅, hybrid-array ✅, cmov ✅ — libc in progress. Bu
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #28 — regression repair)
+
+### ⚠️ Fix #28: repaired a real regression from fix #26
+Fix #26's size_of-import insertion logic broke `hybrid-array` (previously fixed in fixes #22-25) by inserting a `use` statement in the MIDDLE of a multi-line `#![allow(\n ..., \n ...\n)]` attribute — the naive per-line check only recognized single-line attributes. Confirmed via exact CI error: "expected identifier, found keyword `use`".
+
+**Fix:** rewrote the insertion logic to track bracket depth (`[` vs `]`) across multiple lines, correctly handling attributes of any length.
+
+**This round's verification went further than before:** extracted the EXACT script as GitHub Actions' YAML parser actually renders it (not a hand-reconstructed approximation) and ran it against a mock `vendor/` tree reproducing the precise regression (hybrid-array's real multi-line attribute shape), plus indexmap (must stay skipped) and cmov (must still work). All three confirmed correct.
+
+### Lesson reinforced (2nd regression this session — see also fix #26's dangling-fragment bug)
+When editing complex embedded scripts, testing against a hand-written approximation isn't enough — extracting and running the ACTUAL rendered script (via `yaml.safe_load` + reading `step['run']`) catches discrepancies between intent and what YAML/bash actually produces.
+
+### Status: AWAITING NEXT CI RESULT
+Full fix chain (28 fixes): `377c0b2`→...→`a9f017d`→`8001160`→`e94498d`
+
+### Running tally of confirmed-fixed crates
+hashbrown ✅, indexmap ✅, hybrid-array ✅ (now re-confirmed after regression repair), cmov ✅, libc (in progress)
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
