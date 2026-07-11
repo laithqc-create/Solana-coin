@@ -299,8 +299,21 @@ jobs:
           #     that doesn't already import them. Respects Rust's rule that
           #     inner attributes (#![...]) must be the first items in a file —
           #     inserts after any leading #![...] lines, not before them.
-          #     Verified locally (Rule 8) against synthetic files matching the
-          #     exact turbofish call shape (size_of::<T>()) before pushing.
+          #
+          #     FIX #28 — REGRESSION REPAIR: the original version (fix #26)
+          #     only recognized SINGLE-LINE #![...] attributes. hybrid-array's
+          #     lib.rs has a MULTI-LINE #![allow(\n    ...,\n    ...\n)]
+          #     attribute; the naive per-line check stopped after just the
+          #     first line of it, inserting our 'use' statement in the MIDDLE
+          #     of the attribute and corrupting a crate we'd already fixed
+          #     (fixes #22-25) — confirmed via the exact CI error: "expected
+          #     identifier, found keyword `use`" at the insertion point.
+          #     Rewritten to track bracket depth ([ vs ]) across multiple
+          #     lines, only closing the "in attribute" state once depth
+          #     returns to zero, regardless of how many lines it spans.
+          #     Verified locally (Rule 8) against three cases before pushing
+          #     this fix: multi-line attribute (the regression case),
+          #     single-line attributes (must not regress), and no attributes.
           printf '%s\n' \
             'import re, pathlib' \
             'bare_pat = re.compile(r"(?<!::)\b(size_of|align_of|size_of_val)\s*(::<[^>()]*>)?\s*\(")' \
@@ -312,14 +325,27 @@ jobs:
             '        continue' \
             '    lines = text.split("\n")' \
             '    insert_at = 0' \
+            '    depth = 0' \
+            '    in_attr = False' \
             '    for i, line in enumerate(lines):' \
             '        s = line.strip()' \
-            '        if s.startswith("#!"):' \
-            '            insert_at = i + 1' \
-            '        elif s == "" or s.startswith("//"):' \
+            '        if not in_attr and s == "":' \
             '            continue' \
-            '        else:' \
-            '            break' \
+            '        if not in_attr and s.startswith("//"):' \
+            '            continue' \
+            '        if not in_attr and s.startswith("#!"):' \
+            '            in_attr = True' \
+            '            depth = 0' \
+            '        if in_attr:' \
+            '            depth += line.count("[") - line.count("]")' \
+            '            if depth <= 0:' \
+            '                in_attr = False' \
+            '                insert_at = i + 1' \
+            '            continue' \
+            '        insert_at = i' \
+            '        break' \
+            '    else:' \
+            '        insert_at = len(lines)' \
             '    lines.insert(insert_at, "use core::mem::{size_of, align_of, size_of_val};")' \
             '    rf.write_text("\n".join(lines))' \
             '    patched += 1' \
@@ -608,14 +634,27 @@ jobs:
             '        continue' \
             '    lines = text.split("\n")' \
             '    insert_at = 0' \
+            '    depth = 0' \
+            '    in_attr = False' \
             '    for i, line in enumerate(lines):' \
             '        s = line.strip()' \
-            '        if s.startswith("#!"):' \
-            '            insert_at = i + 1' \
-            '        elif s == "" or s.startswith("//"):' \
+            '        if not in_attr and s == "":' \
             '            continue' \
-            '        else:' \
-            '            break' \
+            '        if not in_attr and s.startswith("//"):' \
+            '            continue' \
+            '        if not in_attr and s.startswith("#!"):' \
+            '            in_attr = True' \
+            '            depth = 0' \
+            '        if in_attr:' \
+            '            depth += line.count("[") - line.count("]")' \
+            '            if depth <= 0:' \
+            '                in_attr = False' \
+            '                insert_at = i + 1' \
+            '            continue' \
+            '        insert_at = i' \
+            '        break' \
+            '    else:' \
+            '        insert_at = len(lines)' \
             '    lines.insert(insert_at, "use core::mem::{size_of, align_of, size_of_val};")' \
             '    rf.write_text("\n".join(lines))' \
             '    patched += 1' \
