@@ -733,3 +733,31 @@ hashbrown ✅, indexmap ✅, hybrid-array ✅, cmov ✅, libc ✅, ctutils (this
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #30)
+
+### 🎉 ctutils CONFIRMED FIXED. Now deep into borsh/solana-program territory
+Compile log progressed through borsh, solana-frozen-abi, solana-program, bytemuck_derive, bs58, keccak — real depth achieved.
+
+### Fix #30 applied (commit `5506c02`)
+**Self-inflicted issue:** `keccak` — E0252 duplicate `size_of` import, caused by OUR OWN fix #26 patch, not an upstream problem. keccak imports `size_of` via a nested `use core::{ cmp, mem::size_of, ptr }` group; our detection regex only matched the flat `use core::mem::size_of` form, missing this nested shape entirely.
+
+**Fix:** broadened detection to match `size_of`/`align_of`/`size_of_val` imported via ANY use-tree shape, not just the flat one.
+
+**Process note (Rule 8, meta):** my first verification attempt gave a false "still broken" result because I ran a STALE previously-generated `/tmp/fix_size_of_imports.py` instead of regenerating it from the updated script. Caught by checking the actual file content, re-ran correctly.
+
+**Verified:** keccak's nested import now correctly detected/skipped; hybrid-array's multi-line-attribute case (fix #28) still works — no new regression.
+
+### Status: AWAITING NEXT CI RESULT
+Full fix chain (30 fixes): `377c0b2`→...→`c3b5789`→`5506c02`
+
+### Running tally of confirmed-fixed crates
+hashbrown ✅, indexmap ✅, hybrid-array ✅, cmov ✅, libc ✅, ctutils ✅. Now past: borsh, solana-frozen-abi, solana-program, blake3, bs58 — very deep into the dependency tree. keccak in progress.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
