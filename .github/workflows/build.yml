@@ -332,7 +332,7 @@ jobs:
           printf '%s\n' \
             'import re, pathlib' \
             'bare_pat = re.compile(r"(?<!::)\b(size_of|align_of|size_of_val)\s*(::<[^>()]*>)?\s*\(")' \
-            'has_import_pat = re.compile(r"use\s+core::mem::(\{[^}]*(size_of|align_of)|(size_of|align_of)\b)")' \
+            'has_import_pat = re.compile(r"use\s+core::mem::(\{[^}]*(size_of|align_of)|(size_of|align_of)\b)|use\s+core::\{[^}]*\bmem::(size_of|align_of|size_of_val)\b")' \
             'patched = 0' \
             'for rf in pathlib.Path("vendor").rglob("*.rs"):' \
             '    text = rf.read_text()' \
@@ -644,7 +644,7 @@ jobs:
           printf '%s\n' \
             'import re, pathlib' \
             'bare_pat = re.compile(r"(?<!::)\b(size_of|align_of|size_of_val)\s*(::<[^>()]*>)?\s*\(")' \
-            'has_import_pat = re.compile(r"use\s+core::mem::(\{[^}]*(size_of|align_of)|(size_of|align_of)\b)")' \
+            'has_import_pat = re.compile(r"use\s+core::mem::(\{[^}]*(size_of|align_of)|(size_of|align_of)\b)|use\s+core::\{[^}]*\bmem::(size_of|align_of|size_of_val)\b")' \
             'patched = 0' \
             'for rf in pathlib.Path("vendor").rglob("*.rs"):' \
             '    text = rf.read_text()' \
