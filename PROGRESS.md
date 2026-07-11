@@ -707,3 +707,29 @@ hashbrown ✅, indexmap ✅, hybrid-array ✅ (now re-confirmed after regression
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #29)
+
+### 🎉 Confirmed clean, no regressions: hashbrown, indexmap, hybrid-array, cmov, libc
+Fix #28's regression repair held — all previously-fixed crates stayed fixed this round.
+
+### Fix #29 applied (commit `cc40766`)
+**Full circle:** `ctutils v0.4.2` — the ORIGINAL crate that started this entire investigation back at fix #8 (the "requires rustc 1.85 or newer" error) — finally surfaced with just 2 concrete errors, same const-fn category as hybrid-array.
+
+**Fix:** applied the identical, already-proven blanket const-fn demotion (fix #24's pattern), scoped to `ctutils` only.
+
+**Verified locally:** tested against the exact reported lines before pushing.
+
+### Status: AWAITING NEXT CI RESULT — may be very close to green
+Full fix chain (29 fixes): `377c0b2`→...→`726cddc`(docs)→`cc40766`
+
+### Running tally of confirmed-fixed crates
+hashbrown ✅, indexmap ✅, hybrid-array ✅, cmov ✅, libc ✅, ctutils (this round). `borsh v1.7.0` was compiling successfully right before ctutils failed — worth watching what comes after ctutils if this round succeeds.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
