@@ -788,3 +788,24 @@ hashbrown ✅, indexmap ✅, hybrid-array ✅ (via source patch), cmov ✅, libc
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #32)
+
+### Fix #32 applied (commit `66244cb`)
+Got full `memchr` error text — same E0753 category as `libc` (fix #27), inner-vs-outer doc comment, but a multi-line block style (`/*! ... */`) this time. Fixed by changing only the opening delimiter to `/**`, content-anchored on the unique docstring text (not file path/line number, which shift with leading content).
+
+**Verified end-to-end:** extracted the actual rendered script from YAML and ran it against a mock file reproducing the exact reported content — confirmed correct.
+
+### Status: AWAITING NEXT CI RESULT
+Full fix chain (32 fixes): `377c0b2`→...→`b10e97b`→`66244cb`
+
+### Running tally of confirmed-fixed crates
+hashbrown ✅, indexmap ✅, hybrid-array ✅, cmov ✅, libc ✅, ctutils ✅, keccak ✅, bytemuck (pinned, awaiting confirmation), memchr (this round).
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
