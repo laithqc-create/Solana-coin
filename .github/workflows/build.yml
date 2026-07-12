@@ -396,6 +396,27 @@ jobs:
             echo "✅ Patched libc-specific: 2 inner->outer doc comments"
           fi
 
+          # 4h. memchr-specific (fix #32): same E0753 category as libc (fix
+          #     #27), but a multi-line block comment (/*! ... */) instead of
+          #     a line comment (//!). Only the opening delimiter needs to
+          #     change (/*! -> /**) — content and closing */ untouched.
+          #     Content-anchored on the unique docstring text (not line
+          #     number or file path, which we don't know exactly) to avoid
+          #     touching any other legitimate /*! block elsewhere in memchr.
+          if [ -d vendor/memchr ]; then
+            printf '%s\n' \
+              'import pathlib' \
+              'patched = 0' \
+              'for f in pathlib.Path("vendor/memchr").rglob("*.rs"):' \
+              '    text = f.read_text()' \
+              '    if "Rabin-Karp substring search algorithm" in text and text.lstrip().startswith("/*!"):' \
+              '        f.write_text(text.replace("/*!\n", "/**\n", 1))' \
+              '        patched += 1' \
+              'print(f"Patched {patched} memchr file(s): inner->outer block doc comment")' \
+              > /tmp/fix_memchr_doc.py
+            python3 /tmp/fix_memchr_doc.py
+          fi
+
           # 5. Recompute .cargo-checksum.json for EVERY file in EVERY vendored
           #    crate (generalized from Cargo.toml-only, since we now also patch
           #    .rs source files). cargo vendor verifies a SHA-256 per file before
@@ -691,6 +712,19 @@ jobs:
             sed -i \
               's|^//! Linux-specific definitions for linux-like values$|/// Linux-specific definitions for linux-like values|' \
               vendor/libc/src/unix/linux_like/linux/mod.rs 2>/dev/null || true
+          fi
+          if [ -d vendor/memchr ]; then
+            printf '%s\n' \
+              'import pathlib' \
+              'patched = 0' \
+              'for f in pathlib.Path("vendor/memchr").rglob("*.rs"):' \
+              '    text = f.read_text()' \
+              '    if "Rabin-Karp substring search algorithm" in text and text.lstrip().startswith("/*!"):' \
+              '        f.write_text(text.replace("/*!\n", "/**\n", 1))' \
+              '        patched += 1' \
+              'print(f"Patched {patched} memchr file(s): inner->outer block doc comment")' \
+              > /tmp/fix_memchr_doc.py
+            python3 /tmp/fix_memchr_doc.py
           fi
           printf '%s\n' \
             'import hashlib, json, pathlib' \
