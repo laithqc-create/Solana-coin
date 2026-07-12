@@ -409,7 +409,7 @@ jobs:
               'patched = 0' \
               'for f in pathlib.Path("vendor/memchr").rglob("*.rs"):' \
               '    text = f.read_text()' \
-              '    if "Rabin-Karp substring search algorithm" in text and text.lstrip().startswith("/*!"):' \
+              '    if "Rabin-Karp substring search algorithm" in text and "/*!\n" in text:' \
               '        f.write_text(text.replace("/*!\n", "/**\n", 1))' \
               '        patched += 1' \
               'print(f"Patched {patched} memchr file(s): inner->outer block doc comment")' \
@@ -719,7 +719,7 @@ jobs:
               'patched = 0' \
               'for f in pathlib.Path("vendor/memchr").rglob("*.rs"):' \
               '    text = f.read_text()' \
-              '    if "Rabin-Karp substring search algorithm" in text and text.lstrip().startswith("/*!"):' \
+              '    if "Rabin-Karp substring search algorithm" in text and "/*!\n" in text:' \
               '        f.write_text(text.replace("/*!\n", "/**\n", 1))' \
               '        patched += 1' \
               'print(f"Patched {patched} memchr file(s): inner->outer block doc comment")' \
