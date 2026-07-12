@@ -832,3 +832,29 @@ When content-anchoring a fix, avoid adding extra positional/structural condition
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #34)
+
+### On the user's direct question this round
+Asked how I can help find real errors without being able to run `cargo check`/`cargo rust check` myself. Answered honestly: no Rust toolchain in this sandbox. Substitute has been extracting exact rendered scripts from YAML and testing against synthetic files reproducing real error text — imperfect but has caught real bugs. Suggested the user run `cargo check` locally/Codespaces if available, for much faster iteration than CI round-trips.
+
+### Fix #34 applied (commit `fb267ed`)
+**Third occurrence of the same self-inflicted bug category:** `bytemuck` imports size_of via `mem::{align_of, size_of}` — a nested GROUP shape not covered by the two enumerated patterns from fixes #26/#30.
+
+**Root fix (not another enumerated case):** replaced the enumerated-shapes approach entirely with a general, bounded-distance regex — checks if `mem::` appears anywhere within ~20 characters of a target identifier, regardless of brackets/punctuation between them. Covers flat, single-nested, and group-nested shapes uniformly with ONE pattern, instead of needing a new case every time a new nesting shape appears.
+
+**Verified against ALL known shapes simultaneously** (not just the new one in isolation, specifically to guard against regressions): bytemuck's own correct existing import, the new group-nested case, keccak's single-nested case, and hybrid-array's multi-line-attribute case — all four confirmed correct via the exact extracted rendered script.
+
+### Status: AWAITING NEXT CI RESULT — this should end the size_of-duplicate-import whack-a-mole for good
+Full fix chain (34 fixes): `377c0b2`→...→`126772f`→`fb267ed`
+
+### Running tally of confirmed-fixed crates
+hashbrown ✅, indexmap ✅, hybrid-array ✅, cmov ✅, libc ✅, ctutils ✅, keccak ✅, memchr (pending confirmation), bytemuck (pinned + import fix, pending confirmation)
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
