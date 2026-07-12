@@ -34,6 +34,15 @@ indexmap = "=2.2.6"
 # patch releases" — same escalating-MSRV risk pattern seen in ctutils/toml_parser.
 # Pinned to an early 0.x release, well before the const-generics-heavy rewrite.
 hybrid-array = "=0.2.3"
+# Session 9, fix #31: bytemuck's checked.rs failed with 'From<PodCastError>
+# not implemented for CheckedCastError' — verified via primary source
+# (crates.io/Lokathor's own GitHub repo) that this From impl IS present,
+# unconditionally, in bytemuck's normal source. This strongly suggests an
+# unexplained interaction with our vendor-wide patches or a specific
+# version/feature-flag combination, rather than a genuine upstream gap —
+# rather than guess at a source-level root cause, pinning to a known,
+# reasonably recent, explicit version sidesteps the ambiguity entirely.
+bytemuck = "=1.19.0"
 
 [features]
 no-entrypoint = []
