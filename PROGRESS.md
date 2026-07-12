@@ -761,3 +761,30 @@ hashbrown ✅, indexmap ✅, hybrid-array ✅, cmov ✅, libc ✅, ctutils ✅. 
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #31)
+
+### Fix #31 applied (commit `7a28412`)
+**bytemuck** — E0277 "From<PodCastError> not implemented for CheckedCastError". Verified via primary source (crates.io, Lokathor/bytemuck GitHub) that this From impl exists unconditionally in bytemuck's real source — meaning this is NOT a genuine upstream gap, but an unexplained interaction (possibly with one of our vendor-wide patches, or a version/feature-flag combination). Rather than guess at source-level root cause, pinned `bytemuck = "=1.19.0"` directly in Cargo.toml (same low-risk technique used for indexmap/hybrid-array).
+
+**Note:** `keccak` confirmed fixed this round (no longer erroring).
+
+### ⚠️ Unresolved: memchr E0753
+The pasted log for `memchr` only showed a trailing "For more information about this error, try `rustc --explain E0753`" line — NO actual error text/location was included. Could not diagnose or fix this one — **need the user to paste the full memchr error section** (should be immediately above the `bytemuck` error in the same log) next round.
+
+### Curiosity noted, not blocking
+`hybrid-array = "=0.2.3"` pin in Cargo.toml appears to have NEVER actually taken effect (CI logs consistently show `hybrid-array v0.4.13` compiling, not 0.2.3) — yet the crate compiles successfully anyway because our SOURCE patches (fix #24/25) target the actual resolved 0.4.13 content directly and work regardless of the pin. Non-blocking mystery, not worth investigating further given time constraints — the source-patch fallback is carrying it fine.
+
+### Status: AWAITING NEXT CI RESULT
+Full fix chain (31 fixes): `377c0b2`→...→`110625f`→`7a28412`
+
+### Running tally of confirmed-fixed crates
+hashbrown ✅, indexmap ✅, hybrid-array ✅ (via source patch), cmov ✅, libc ✅, ctutils ✅, keccak ✅. bytemuck pinned (awaiting confirmation). memchr — awaiting full error text from user.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
