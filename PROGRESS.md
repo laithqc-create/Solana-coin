@@ -809,3 +809,26 @@ hashbrown ✅, indexmap ✅, hybrid-array ✅, cmov ✅, libc ✅, ctutils ✅, 
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after fix #33)
+
+### Fix #33 applied (commit `3870a2a`)
+Fix #32's memchr fix had a bug: required `text.lstrip().startswith("/*!")`, but the real file has a leading line before the doc comment (error showed `:2:1`, meaning line 1 has other content). Same category of mistake as the libc fix (fix #27) — I'd learned this lesson once already and reintroduced it via an unnecessary extra condition.
+
+**Fix:** removed the position requirement — content-uniqueness alone (the docstring text) is sufficient to safely identify the target file/block.
+
+**Verified against the actual bug scenario this time** (leading line before doc comment, matching the real file's line-2 position), not just a simplified case — confirmed the exact extracted script now patches correctly.
+
+### Status: AWAITING NEXT CI RESULT
+Full fix chain (33 fixes): `377c0b2`→...→`2e0b77b`→`3870a2a`
+
+### Lesson reinforced (recurring theme this session)
+When content-anchoring a fix, avoid adding extra positional/structural conditions (starts-with-X, line-number-N) unless truly necessary — they're the most common source of "verified locally but still failed" surprises, since real vendored files almost always have unknown leading content (headers, attributes, generated-file comments) that synthetic tests don't always replicate on the first attempt.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
