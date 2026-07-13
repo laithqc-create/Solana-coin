@@ -23,6 +23,7 @@
 //! License: Sky Protocol (Apache 2.0), Ethena (MIT), Wormhole (Apache 2.0)
 
 use anchor_lang::prelude::*;
+use crate::errors::EcosystemError;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -80,11 +81,11 @@ pub fn split_investment(total_pool_amount: u64) -> Result<(u64, u64)> {
     let invest = total_pool_amount
         .checked_mul(INVESTMENT_BPS)
         .and_then(|v| v.checked_div(10_000))
-        .ok_or_else(|| error!(YieldStrategyError::MathOverflow))?;
+        .ok_or_else(|| error!(EcosystemError::YieldMathOverflow))?;
 
     let liquid = total_pool_amount
         .checked_sub(invest)
-        .ok_or_else(|| error!(YieldStrategyError::MathOverflow))?;
+        .ok_or_else(|| error!(EcosystemError::YieldMathOverflow))?;
 
     Ok((invest, liquid))
 }
@@ -130,13 +131,13 @@ pub fn validate_keeper_report(
     // Status must match
     require!(
         expected_status == actual_status,
-        YieldStrategyError::InvalidStrategyStatus
+        EcosystemError::InvalidStrategyStatus
     );
 
     // Timestamp cannot be in the future
     require!(
         report_ts <= now_ts,
-        YieldStrategyError::InvalidTimestamp
+        EcosystemError::YieldTimestampInFuture
     );
 
     // Reported amount must be within 10% of expected (1000 bps tolerance)
@@ -151,7 +152,7 @@ pub fn validate_keeper_report(
 
         require!(
             reported_amount >= lower && reported_amount <= upper,
-            YieldStrategyError::KeeperReportOutOfRange
+            EcosystemError::KeeperReportOutOfRange
         );
     }
 
@@ -159,30 +160,8 @@ pub fn validate_keeper_report(
 }
 
 // ── Error codes ───────────────────────────────────────────────────────────────
-
-#[error_code]
-pub enum YieldStrategyError {
-    #[msg("Arithmetic overflow in yield calculation")]
-    MathOverflow,
-
-    #[msg("Strategy is not in the expected status for this operation")]
-    InvalidStrategyStatus,
-
-    #[msg("Keeper report timestamp is in the future")]
-    InvalidTimestamp,
-
-    #[msg("Keeper reported amount is outside the 10% tolerance range")]
-    KeeperReportOutOfRange,
-
-    #[msg("Pool has insufficient balance for this investment")]
-    InsufficientPoolBalance,
-
-    #[msg("Investment already active — withdraw before re-investing")]
-    InvestmentAlreadyActive,
-
-    #[msg("No active investment to withdraw")]
-    NoActiveInvestment,
-}
+// Merged into crate::errors::EcosystemError (Anchor 1.0 requires exactly one
+// #[error_code] block per program — see errors.rs for the unified enum).
 
 // ── Tests (Rule 8: validate all paths) ────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 [toolchain]
-anchor_version = "0.30.1"
-solana_version = "2.1.21"
+anchor_version = "1.0.2"
+solana_version = "3.1.10"
 
 [features]
 seeds = false
@@ -11,9 +11,6 @@ ecosystem_token = "11111111111111111111111111111112"
 
 [programs.mainnet]
 ecosystem_token = "11111111111111111111111111111112"
-
-[registry]
-url = "https://api.anchor-lang.com/api/registry"
 
 [provider]
 cluster = "Devnet"

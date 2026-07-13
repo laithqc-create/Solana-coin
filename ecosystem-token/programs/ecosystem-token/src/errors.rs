@@ -73,4 +73,21 @@ pub enum EcosystemError {
     Unauthorized,
     #[msg("Invalid timestamp")]
     InvalidTimestamp,
+
+    // ── Yield Strategy (merged from former YieldStrategyError — Anchor 1.0
+    //    requires exactly one #[error_code] block per program) ─────────────
+    #[msg("Strategy is not in the expected status for this operation")]
+    InvalidStrategyStatus,
+    #[msg("Arithmetic overflow in yield calculation")]
+    YieldMathOverflow,
+    #[msg("Keeper report timestamp is in the future")]
+    YieldTimestampInFuture,
+    #[msg("Keeper reported amount is outside the 10% tolerance range")]
+    KeeperReportOutOfRange,
+    #[msg("Pool has insufficient balance for this investment")]
+    InsufficientPoolBalance,
+    #[msg("Investment already active — withdraw before re-investing")]
+    InvestmentAlreadyActive,
+    #[msg("No active investment to withdraw")]
+    NoActiveInvestment,
 }

@@ -39,7 +39,7 @@ pub fn invest_usdc_to_susds(ctx: Context<InvestUsdcToSusds>) -> Result<()> {
     require!(
         ctx.accounts.sky_position.status == StrategyStatus::Inactive
             || ctx.accounts.sky_position.status == StrategyStatus::PendingWithdrawal,
-        YieldStrategyError::InvestmentAlreadyActive
+        EcosystemError::InvestmentAlreadyActive
     );
 
     let pool = &mut ctx.accounts.pool_state;
@@ -111,8 +111,8 @@ pub fn report_sky_yield(
     let now = Clock::get()?.unix_timestamp;
     let pos = &mut ctx.accounts.sky_position;
 
-    require!(pos.status == StrategyStatus::Active, YieldStrategyError::InvalidStrategyStatus);
-    require!(report_ts <= now, YieldStrategyError::InvalidTimestamp);
+    require!(pos.status == StrategyStatus::Active, EcosystemError::InvalidStrategyStatus);
+    require!(report_ts <= now, EcosystemError::YieldTimestampInFuture);
 
     // Yield = balance increase since last report
     let yield_earned = new_susds_balance.saturating_sub(pos.susds_balance);
@@ -141,7 +141,7 @@ pub fn report_sky_yield(
 pub fn withdraw_from_susds(ctx: Context<KeeperReportSky>) -> Result<()> {
     let pos = &mut ctx.accounts.sky_position;
     require!(
-        pos.status == StrategyStatus::Active, YieldStrategyError::InvalidStrategyStatus);
+        pos.status == StrategyStatus::Active, EcosystemError::InvalidStrategyStatus);
 
     pos.status = StrategyStatus::PendingWithdrawal;
 
@@ -182,7 +182,7 @@ pub fn invest_usdt_to_susde(ctx: Context<InvestUsdtToSusde>) -> Result<()> {
     require!(
         ctx.accounts.ethena_position.status == StrategyStatus::Inactive
             || ctx.accounts.ethena_position.status == StrategyStatus::PendingWithdrawal,
-        YieldStrategyError::InvestmentAlreadyActive
+        EcosystemError::InvestmentAlreadyActive
     );
 
     let pool = &mut ctx.accounts.pool_state;
@@ -251,8 +251,8 @@ pub fn report_ethena_yield(
     let now = Clock::get()?.unix_timestamp;
     let pos = &mut ctx.accounts.ethena_position;
 
-    require!(pos.status == StrategyStatus::Active, YieldStrategyError::InvalidStrategyStatus);
-    require!(report_ts <= now, YieldStrategyError::InvalidTimestamp);
+    require!(pos.status == StrategyStatus::Active, EcosystemError::InvalidStrategyStatus);
+    require!(report_ts <= now, EcosystemError::YieldTimestampInFuture);
 
     let yield_earned = new_susde_balance.saturating_sub(pos.susde_balance);
 
@@ -277,7 +277,7 @@ pub fn report_ethena_yield(
 /// Initiate withdrawal from sUSDe back to USDT.
 pub fn withdraw_from_susde(ctx: Context<KeeperReportEthena>) -> Result<()> {
     let pos = &mut ctx.accounts.ethena_position;
-    require!(pos.status == StrategyStatus::Active, YieldStrategyError::InvalidStrategyStatus);
+    require!(pos.status == StrategyStatus::Active, EcosystemError::InvalidStrategyStatus);
 
     pos.status = StrategyStatus::PendingWithdrawal;
 

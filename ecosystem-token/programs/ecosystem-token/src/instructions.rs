@@ -135,7 +135,7 @@ pub fn mint_tokens(
 
     // ── Transfer USDC from user to vault ────────────────────────────
     let transfer_ctx = CpiContext::new(
-        ctx.accounts.token_program.to_account_info(),
+        Token::id(),
         Transfer {
             from: ctx.accounts.user_usdc_ata.to_account_info(),
             to: ctx.accounts.usdc_vault.to_account_info(),
@@ -149,7 +149,7 @@ pub fn mint_tokens(
     let signer = &[&seeds[..]];
 
     let mint_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.to_account_info(),
+        Token::id(),
         MintTo {
             mint: ctx.accounts.token_mint.to_account_info(),
             to: ctx.accounts.user_token_ata.to_account_info(),
@@ -162,7 +162,7 @@ pub fn mint_tokens(
     // ── Mint protocol fee to treasury (100% of fee) ─────────────────
     if protocol_fee > 0 {
         let fee_ctx = CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
+            Token::id(),
             MintTo {
                 mint: ctx.accounts.token_mint.to_account_info(),
                 to: ctx.accounts.protocol_treasury_ata.to_account_info(),
@@ -254,7 +254,7 @@ pub fn burn_tokens(ctx: Context<BurnTokens>, token_amount: u64) -> Result<()> {
 
     // ── Burn ALL user's tokens ───────────────────────────────────────
     let burn_ctx = CpiContext::new(
-        ctx.accounts.token_program.to_account_info(),
+        Token::id(),
         Burn {
             mint: ctx.accounts.token_mint.to_account_info(),
             from: ctx.accounts.user_token_ata.to_account_info(),
@@ -268,7 +268,7 @@ pub fn burn_tokens(ctx: Context<BurnTokens>, token_amount: u64) -> Result<()> {
     let signer = &[&seeds[..]];
 
     let usdc_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.to_account_info(),
+        Token::id(),
         Transfer {
             from: ctx.accounts.usdc_vault.to_account_info(),
             to: ctx.accounts.user_usdc_ata.to_account_info(),
@@ -281,7 +281,7 @@ pub fn burn_tokens(ctx: Context<BurnTokens>, token_amount: u64) -> Result<()> {
     // ── Protocol fee: transferred from vault reserves ────────────────
     if protocol_fee > 0 {
         let fee_ctx = CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
+            Token::id(),
             Transfer {
                 from: ctx.accounts.usdc_vault.to_account_info(),
                 to: ctx.accounts.protocol_treasury_ata.to_account_info(),
@@ -352,7 +352,7 @@ pub fn claim_yield(ctx: Context<ClaimYield>) -> Result<()> {
     let signer = &[&seeds[..]];
 
     let transfer_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.to_account_info(),
+        Token::id(),
         Transfer {
             from: ctx.accounts.yield_usdc_vault.to_account_info(),
             to: ctx.accounts.user_usdc_ata.to_account_info(),
@@ -448,7 +448,7 @@ pub fn complete_unstake(ctx: Context<CompleteUnstake>) -> Result<()> {
     let signer = &[&seeds[..]];
 
     let transfer_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.to_account_info(),
+        Token::id(),
         Transfer {
             from: ctx.accounts.usdc_vault.to_account_info(),
             to: ctx.accounts.user_usdc_ata.to_account_info(),
@@ -481,7 +481,7 @@ pub fn emergency_redeem_defi(ctx: Context<EmergencyRedeemDefi>) -> Result<()> {
     let signer = &[&seeds[..]];
 
     let transfer_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.to_account_info(),
+        Token::id(),
         Transfer {
             from: ctx.accounts.usdc_vault.to_account_info(),
             to: ctx.accounts.user_usdc_ata.to_account_info(),
