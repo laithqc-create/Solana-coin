@@ -873,3 +873,39 @@ User ran `cargo check` locally (Windows, in `ecosystem-token/`) with their norma
 **Suggested to user:** if they have Solana CLI + Anchor CLI installed locally, running `anchor build` (not just `cargo check`) would reproduce our exact SBF-specific errors locally, dramatically speeding up iteration vs. CI round-trips. Awaiting response on whether they have this available.
 
 ### Status: still waiting on next CI result (fix #34, commit `fb267ed`) OR local `anchor build` output if available
+
+---
+
+## 🛑 RESUME FROM HERE (Session 9, checkpoint after Anchor 1.0 upgrade + CI install fix)
+
+### ⚠️ Sandbox reset occurred mid-session
+Claude's sandbox/container reset (lost local clone, git config, cached credentials). Re-cloned successfully — all prior commits intact on GitHub. User confirmed their original GitHub token (from early session, flagged for rotation multiple times) is "still valid" and it was used to push. **Rotation status remains unconfirmed — please verify/rotate at https://github.com/settings/tokens if not already done.**
+
+### 🎉 MAJOR STRATEGIC PIVOT: Anchor 0.30.1 → 1.0.2, Solana CLI 2.1.21 → 3.1.10 (commits `fb126ba`, `939982a`)
+User ran `cargo check` locally (Windows) — **succeeded completely**, confirming the smart contract source is logically/syntactically sound; everything fought this session was SBF-toolchain-specific. User then asked about driving fixes from official Anchor/Solana docs directly — led to discovering **Anchor 1.0.0 is now current stable** (we'd been using 0.30.1, pinned from research before 1.0 existed), officially recommending **Solana CLI 3.1.10** — likely bundling a genuinely modern rustc by default, potentially obsoleting most of the 34-fix vendor-patching apparatus.
+
+**Audited every documented 1.0 breaking change against our contract before touching anything:**
+- `#[interface]`, `declare_program!`: not used — no impact
+- `[registry]` section in `Anchor.toml`: removed (no longer recognized)
+- `CpiContext::new`/`new_with_signer`: 9 call sites, all identical pattern — updated `ctx.accounts.token_program.to_account_info()` → `Token::id()` per official before/after example
+- **Multiple `#[error_code]` blocks (real blocker):** had two separate enums (`EcosystemError`, `YieldStrategyError`) — now a hard compile error in 1.0. Merged into one unified `EcosystemError`, carefully renaming 2 colliding variant names (`MathOverflow`→`YieldMathOverflow`, `InvalidTimestamp`→`YieldTimestampInFuture` for the yield-specific ones) to preserve both sets of more-specific error messages rather than silently dropping one. Updated all 12 usage sites across `yield_strategy.rs` and `investment_instructions.rs`. Verified zero orphaned references.
+
+**Also fixed a second real bug found via primary-source verification:** CI's Anchor install used npm (`@coral-xyz/anchor-cli@1.0.2`), but npmjs.com confirms that package is stuck at `0.31.2` — 1.0.x was never published there. Replaced with the officially-documented `avm`-based install method (compiles from source, cached to avoid repeat cost).
+
+### Verified before pushing (Rule 8)
+TOML syntax valid (all 3 files), brace balance confirmed on all 4 edited Rust files, YAML validated via PyYAML.
+
+### Status: AWAITING CI RESULT for the full upgraded stack (commit `939982a`)
+This is a much bigger swing than individual crate patches — could either go green quickly (if Solana 3.1.10's bundled rustc is modern enough) or surface new issues specific to the Anchor 1.0 API surface. Either way, this is a genuine architecture-level fix attempt, not another whack-a-mole patch.
+
+### If this succeeds
+Consider whether the extensive vendor/source-patching apparatus (Layers 1-4, ~30 fixes' worth of sed/python patches for hashbrown/indexmap/hybrid-array/cmov/libc/ctutils/keccak/memchr/bytemuck) can be simplified or removed — don't rush this, confirm green build first, then evaluate cleanup as a separate pass.
+
+### If this fails
+Read the new error carefully — could be a genuinely new Anchor 1.0 API issue (different from anything faced this session) or could be that Solana 3.1.10's bundled rustc still isn't modern enough (would need further investigation). Don't assume the old patches are still relevant without checking.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token confirmed "still valid" by user as of this checkpoint — rotation strongly recommended, status still not confirmed done
