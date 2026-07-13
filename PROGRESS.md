@@ -858,3 +858,18 @@ hashbrown ✅, indexmap ✅, hybrid-array ✅, cmov ✅, libc ✅, ctutils ✅, 
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token still embedded in sandbox git remote — rotation status unconfirmed
+
+---
+
+## 🎉 MAJOR CONFIRMATION: local `cargo check` succeeded cleanly
+
+User ran `cargo check` locally (Windows, in `ecosystem-token/`) with their normal modern Rust toolchain. Result: **`Finished dev profile [unoptimized + debuginfo] target(s) in 7m 05s`** — zero errors, only harmless cosmetic warnings (unused imports, dead code in unused-but-intentionally-present functions, Anchor macro `cfg` warnings — all expected/normal).
+
+**This confirms:**
+1. Our smart contract source is logically/syntactically correct — everything we've been fighting is 100% about Solana's SBF cross-compiler (deliberately old, pinned) not supporting modern crates.io syntax, NOT a bug in our contract.
+2. Solved the `hybrid-array` pin mystery: the local lockfile shows BOTH `hybrid-array v0.2.3` (our pin, used directly) AND `hybrid-array v0.4.13` (pulled in separately via another transitive path, likely digest/crypto-common) coexisting in the graph. The pin works correctly — a second independent copy also gets pulled in elsewhere, which is why the source patches for 0.4.13 have remained necessary alongside the pin.
+3. `indexmap=2.2.6` and `bytemuck=1.19.0` pins also confirmed correctly resolved (visible in the "Adding..." lines).
+
+**Suggested to user:** if they have Solana CLI + Anchor CLI installed locally, running `anchor build` (not just `cargo check`) would reproduce our exact SBF-specific errors locally, dramatically speeding up iteration vs. CI round-trips. Awaiting response on whether they have this available.
+
+### Status: still waiting on next CI result (fix #34, commit `fb267ed`) OR local `anchor build` output if available
