@@ -11,8 +11,8 @@ env:
   # Upgraded from 1.18.26/0.29.0 (Session 9, fix #10) — verified against primary
   # sources (official Anchor docs/GitHub, Apache 2.0). Anchor 0.30+ is the version
   # line built for the modern Solana v2/Agave ecosystem (cargo build-sbf default).
-  SOLANA_VERSION: "2.1.21"
-  ANCHOR_VERSION: "0.30.1"
+  SOLANA_VERSION: "3.1.10"
+  ANCHOR_VERSION: "1.0.2"
   NODE_VERSION: "20"
   RUST_TOOLCHAIN: "1.85.0"
   # RE-ADDED (fix #19) after removal in fix #12. Source-patching indexmap hit a
@@ -70,15 +70,33 @@ jobs:
           key: vendor-${{ hashFiles('ecosystem-token/Cargo.toml', 'ecosystem-token/programs/ecosystem-token/Cargo.toml') }}
           restore-keys: vendor-
 
+      - name: Cache avm and installed Anchor CLI
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.avm
+            ~/.cargo/bin/avm
+          key: avm-${{ env.ANCHOR_VERSION }}
+
       # ── Node / Anchor CLI ─────────────────────────────────────────────────
       - name: Install Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Install Anchor CLI ${{ env.ANCHOR_VERSION }}
+      - name: Install Anchor CLI ${{ env.ANCHOR_VERSION }} (via avm — official method)
         run: |
-          npm install -g @coral-xyz/anchor-cli@${{ env.ANCHOR_VERSION }}
+          # npm's @coral-xyz/anchor-cli package is stuck at 0.31.2 (verified via
+          # npmjs.com) — 1.0.x was never published there, and even 0.31.x had a
+          # known broken-binary issue on Linux CI (solana-foundation/anchor#3596).
+          # avm (Anchor Version Manager) is the officially documented install
+          # method (anchor-lang.com/docs/installation) for current Anchor
+          # versions — compiles from source, guaranteed correct binary per-arch.
+          if ! command -v avm &> /dev/null; then
+            cargo install --git https://github.com/coral-xyz/anchor avm --locked
+          fi
+          avm install ${{ env.ANCHOR_VERSION }} || true
+          avm use ${{ env.ANCHOR_VERSION }}
 
       # ── Versions ──────────────────────────────────────────────────────────
       - name: Print toolchain versions
@@ -585,9 +603,14 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Install Anchor CLI ${{ env.ANCHOR_VERSION }}
+      - name: Install Anchor CLI ${{ env.ANCHOR_VERSION }} (via avm)
         if: steps.prereq.outputs.skip == 'false'
-        run: npm install -g @coral-xyz/anchor-cli@${{ env.ANCHOR_VERSION }}
+        run: |
+          if ! command -v avm &> /dev/null; then
+            cargo install --git https://github.com/coral-xyz/anchor avm --locked
+          fi
+          avm install ${{ env.ANCHOR_VERSION }} || true
+          avm use ${{ env.ANCHOR_VERSION }}
 
       - name: Restore Rust
         if: steps.prereq.outputs.skip == 'false'
