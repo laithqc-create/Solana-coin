@@ -909,3 +909,27 @@ Read the new error carefully — could be a genuinely new Anchor 1.0 API issue (
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token confirmed "still valid" by user as of this checkpoint — rotation strongly recommended, status still not confirmed done
+
+---
+
+## 🛑 RESUME FROM HERE (checkpoint after Anchor 1.0 dependency cleanup)
+
+### Fix applied (commit `4e256c6`)
+Test job surfaced two expected issues from the Anchor 1.0 upgrade:
+1. **Real conflict:** anchor-spl 1.0.2 requires `bytemuck ^1.23.2`, conflicting with our stale `=1.19.0` pin from fix #31 (calibrated against the OLD 0.30.1 graph). **Removed all three stale pins together** (indexmap, hybrid-array, bytemuck) rather than patching just the one reported conflict — cargo only reports the first unsatisfiable conflict, more could be hidden behind it given how different anchor-spl 1.0.2's transitive tree is.
+2. **RUST_TOOLCHAIN too old:** some new transitive deps (icu_*, idna_adapter) need rustc ≥1.86. Bumped `RUST_TOOLCHAIN` to `1.97.0` (verified current stable via rust-lang blog + releases.rs, not guessed).
+
+### Status: AWAITING CI RESULT
+Full history: 34 fixes on the old 0.30.1/2.1.21 stack, then major pivot to Anchor 1.0.2/Solana 3.1.10 (commits `fb126ba`, `939982a`), now this dependency cleanup (`4e256c6`).
+
+### If new SBF-specific errors surface for the BUILD job
+The old vendor/source-patch apparatus (Layers 1-4 in build.yml, targeting hashbrown/indexmap/hybrid-array/cmov/libc/ctutils/keccak/memchr/bytemuck) is still in place as a safety net — it should mostly no-op harmlessly if those exact crate versions aren't in the new graph, but don't assume it's fully obsolete without confirming. If new version-specific issues appear, re-pin narrowly (same technique, applied fresh against the NEW graph) rather than assuming old pins/patches still apply.
+
+### Sandbox note
+Claude's sandbox reset once already this session (lost local clone/credentials, recovered via re-clone + user confirming token still valid). If it happens again, same recovery process: re-clone, set git config, use user-provided token.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token confirmed still active — rotation strongly recommended, not yet confirmed done
