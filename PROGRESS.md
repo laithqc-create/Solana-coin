@@ -933,3 +933,23 @@ Claude's sandbox reset once already this session (lost local clone/credentials, 
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token confirmed still active — rotation strongly recommended, not yet confirmed done
+
+---
+
+## 🛑 RESUME FROM HERE (checkpoint after SPL version bump)
+
+### Fix applied (commit `a6e98df`)
+Real, structural conflict: our workspace's old `spl-token = "3.5.0"` / `spl-associated-token-account = "1.1.3"` pins require `zeroize <1.4` (via curve25519-dalek 3.2.1), mathematically incompatible with anchor-spl 1.0.2's pull of `solana-zk-sdk 4.0.0` requiring `zeroize ^1.7`.
+
+**Fix:** bumped both to modern majors (`spl-token = "9"`, `spl-associated-token-account = "8"`) — versions the user's own local `cargo check` had already flagged as available.
+
+**Verified zero risk:** grepped entire source tree for direct `spl_token::`/`spl_associated_token_account::` usage — found none. Our program exclusively uses `anchor_spl::token::{...}` wrapper types, so this major bump cannot break our logic.
+
+### Status: AWAITING CI RESULT
+This is likely not the last dependency-graph conflict from the Anchor 1.0 upgrade — the pattern has been: fix one conflict, cargo reports the next one behind it. Keep applying the same approach: read cargo's own explicit conflict message, verify what's actually needed via primary source (crates.io) or the user's local cargo check output, bump/adjust our own dependency declarations rather than guessing.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token confirmed still active — rotation strongly recommended, not yet confirmed done
