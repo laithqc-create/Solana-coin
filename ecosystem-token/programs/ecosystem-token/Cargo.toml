@@ -13,36 +13,17 @@ anchor-spl = { workspace = true }
 spl-token = { workspace = true }
 spl-associated-token-account = { workspace = true }
 rust_decimal = { workspace = true }
-# Explicit direct pin (Session 9, fix #21) — NOT used directly by our code.
-# indexmap is a transitive dependency (pulled in via anchor-lang/anchor-spl's
-# own dependency tree) whose latest releases (2.14.0+) require const_mut_refs,
-# split_at_checked, and other rustc features not supported by Solana's bundled
-# platform-tools compiler. Post-hoc 'cargo update --precise 2.2.6' (fixes #15,
-# #18) never took effect — CI kept resolving 2.14.0 regardless, with no clear
-# error explaining why. Declaring the pin HERE, as a real dependency of our own
-# crate, forces cargo's resolver to either satisfy =2.2.6 across the whole
-# graph (fixing the issue) or fail cargo generate-lockfile with an explicit,
-# unmissable conflict message naming whatever actually requires a newer
-# version — replacing silent failure with a real, actionable error either way.
-indexmap = "=2.2.6"
-# Same technique, same reason (Session 9, fix #22): hybrid-array is a
-# RustCrypto transitive dependency (pulled in via crypto-common/aead/digest's
-# own tree, used by aes-gcm-siv etc.) whose latest releases (0.4.13+) require
-# rustc >=1.85 and const_slice_from_raw_parts_mut — unsupported by Solana's
-# bundled platform-tools compiler. hybrid-array's own docs explicitly warn
-# "MSRV increases are not considered breaking changes and can happen in
-# patch releases" — same escalating-MSRV risk pattern seen in ctutils/toml_parser.
-# Pinned to an early 0.x release, well before the const-generics-heavy rewrite.
-hybrid-array = "=0.2.3"
-# Session 9, fix #31: bytemuck's checked.rs failed with 'From<PodCastError>
-# not implemented for CheckedCastError' — verified via primary source
-# (crates.io/Lokathor's own GitHub repo) that this From impl IS present,
-# unconditionally, in bytemuck's normal source. This strongly suggests an
-# unexplained interaction with our vendor-wide patches or a specific
-# version/feature-flag combination, rather than a genuine upstream gap —
-# rather than guess at a source-level root cause, pinning to a known,
-# reasonably recent, explicit version sidesteps the ambiguity entirely.
-bytemuck = "=1.19.0"
+# NOTE: the indexmap/hybrid-array/bytemuck version pins that were here
+# (Session 9, fixes #21/#22/#31) were calibrated against the OLD anchor-spl
+# 0.30.1 dependency graph. After upgrading to anchor-spl 1.0.2 (which pulls
+# in substantially different transitive versions, e.g. spl-token-group-
+# interface 0.7.1 requiring bytemuck ^1.23.2 — directly conflicting with our
+# old =1.19.0 pin), those pins are stale and removed rather than patched
+# individually, since cargo only reports the FIRST unsatisfiable conflict —
+# there could be more hidden behind it. Letting the resolver work fresh
+# against the new graph; will re-pin specific crates only if new SBF-
+# specific compatibility errors actually surface for the versions it
+# naturally resolves to.
 
 [features]
 no-entrypoint = []
