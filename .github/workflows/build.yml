@@ -251,7 +251,7 @@ jobs:
           #     fn is no longer 'const', the restriction no longer applies.
           #     Verified locally against hybrid-array's exact error lines
           #     before pushing (Rule 8).
-          find vendor/ -name "*.rs" -exec sed -i -E '/&mut/ s/const fn/fn/' {} \;
+          find vendor/ -name "*.rs" -exec sed -i -E "/&mut|&'[a-zA-Z_]+ mut/ s/const fn/fn/" {} \;
 
           echo "✅ Vendor-wide: #[expect]→#[allow], error_in_core impls removed, use<> bounds stripped, const-mut-fn demoted"
 
@@ -668,7 +668,7 @@ jobs:
             sed -i '/^impl core::error::Error for [A-Za-z_][A-Za-z0-9_]* {}$/d' "$rsfile"
           done
           find vendor/ -name "*.rs" -exec sed -i 's/ + use<[^>]*>//g' {} \;
-          find vendor/ -name "*.rs" -exec sed -i -E '/&mut/ s/const fn/fn/' {} \;
+          find vendor/ -name "*.rs" -exec sed -i -E "/&mut|&'[a-zA-Z_]+ mut/ s/const fn/fn/" {} \;
           if [ -d vendor/hashbrown ]; then
             HB=vendor/hashbrown/src
             sed -i 's/ptr::read(&raw const self\.alloc)/ptr::read((\&self.alloc) as *const _)/' "$HB/raw.rs" 2>/dev/null || true
