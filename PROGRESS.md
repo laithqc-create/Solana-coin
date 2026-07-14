@@ -953,3 +953,23 @@ This is likely not the last dependency-graph conflict from the Anchor 1.0 upgrad
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token confirmed still active — rotation strongly recommended, not yet confirmed done
+
+---
+
+## 🛑 RESUME FROM HERE (checkpoint after lifetime-annotated &mut fix)
+
+### Fix applied (commit `2891861`)
+Back in SBF-build-job (vendor/patch) territory — removing the stale indexmap pin let it resolve newer again, and 3 errors slipped through: `pub const fn new_mut<'a>() -> &'a mut Self { Self::from_mut_slice(&mut []) }` — our const-fn regex only matched literal `&mut`, but `&'a mut` (lifetime-annotated) has the lifetime between & and mut, so the substring never matched.
+
+**Fix:** broadened pattern to `&mut|&'[a-zA-Z_]+ mut`. Also switched outer bash quoting single→double (new pattern contains a literal `'`).
+
+**Verified:** tested against the exact failure locally, confirmed old pattern reproduced the bug and new pattern fixes it without touching unrelated code. Extracted actual rendered command from YAML to confirm escaping survived.
+
+### Status: AWAITING CI RESULT
+Since we removed the old indexmap/hybrid-array/bytemuck pins as part of Anchor 1.0 cleanup, the BUILD job's vendor/patch layer is now dealing with fresh (likely newer) versions of these crates than before — expect this may surface a few more const-fn/syntax variants not seen with the OLD pinned versions, even though the general patch categories (const_mut_refs, use<>, size_of, etc.) should mostly still apply.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token confirmed still active — rotation strongly recommended, not yet confirmed done
