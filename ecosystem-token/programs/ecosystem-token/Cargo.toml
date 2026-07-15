@@ -12,18 +12,18 @@ anchor-lang = { workspace = true, features = ["init-if-needed"] }
 anchor-spl = { workspace = true }
 spl-token = { workspace = true }
 spl-associated-token-account = { workspace = true }
-rust_decimal = { workspace = true }
-# NOTE: the indexmap/hybrid-array/bytemuck version pins that were here
-# (Session 9, fixes #21/#22/#31) were calibrated against the OLD anchor-spl
-# 0.30.1 dependency graph. After upgrading to anchor-spl 1.0.2 (which pulls
-# in substantially different transitive versions, e.g. spl-token-group-
-# interface 0.7.1 requiring bytemuck ^1.23.2 — directly conflicting with our
-# old =1.19.0 pin), those pins are stale and removed rather than patched
-# individually, since cargo only reports the FIRST unsatisfiable conflict —
-# there could be more hidden behind it. Letting the resolver work fresh
-# against the new graph; will re-pin specific crates only if new SBF-
-# specific compatibility errors actually surface for the versions it
-# naturally resolves to.
+# indexmap/hybrid-array/bytemuck pins (fixes #21/#22/#31) were removed above
+# when upgrading to anchor-spl 1.0.2, since they conflicted with 1.0.2's new
+# transitive requirements (bytemuck/spl-token/spl-associated-token-account
+# all needed real version bumps, done separately, above). indexmap itself
+# has no such conflict in the new graph — it just naturally resolves to a
+# version too new for Solana's bundled SBF compiler (const_mut_refs, use<>
+# bounds, etc. — the same category fixed repeatedly earlier this session).
+# Re-pinning to the same known-good version, recalibrated for the new graph:
+# if 2.2.6 doesn't fit, cargo generate-lockfile will say so immediately and
+# explicitly (no error-swallowing), same as it did for the real bytemuck/
+# zeroize conflicts.
+indexmap = "=2.2.6"
 
 [features]
 no-entrypoint = []

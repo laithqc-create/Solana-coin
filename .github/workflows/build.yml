@@ -70,7 +70,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ecosystem-token/vendor
-          key: vendor-${{ hashFiles('ecosystem-token/Cargo.toml', 'ecosystem-token/programs/ecosystem-token/Cargo.toml') }}
+          # Key includes the workflow file itself, not just Cargo.toml —
+          # otherwise a patch-only fix (sed pattern changes, no Cargo.toml
+          # edit) keeps the SAME cache key, silently restoring stale,
+          # already-vendored content from a PREVIOUS run instead of
+          # re-running cargo vendor + the new patches. This was likely why
+          # the exact same indexmap error recurred identically across two
+          # consecutive "fixed" pushes that only touched this workflow file.
+          key: vendor-${{ hashFiles('ecosystem-token/Cargo.toml', 'ecosystem-token/programs/ecosystem-token/Cargo.toml', '.github/workflows/build.yml') }}
           restore-keys: vendor-
 
       - name: Cache avm and installed Anchor CLI
