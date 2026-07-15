@@ -12,18 +12,21 @@ anchor-lang = { workspace = true, features = ["init-if-needed"] }
 anchor-spl = { workspace = true }
 spl-token = { workspace = true }
 spl-associated-token-account = { workspace = true }
-# indexmap/hybrid-array/bytemuck pins (fixes #21/#22/#31) were removed above
-# when upgrading to anchor-spl 1.0.2, since they conflicted with 1.0.2's new
-# transitive requirements (bytemuck/spl-token/spl-associated-token-account
-# all needed real version bumps, done separately, above). indexmap itself
-# has no such conflict in the new graph — it just naturally resolves to a
-# version too new for Solana's bundled SBF compiler (const_mut_refs, use<>
-# bounds, etc. — the same category fixed repeatedly earlier this session).
-# Re-pinning to the same known-good version, recalibrated for the new graph:
-# if 2.2.6 doesn't fit, cargo generate-lockfile will say so immediately and
-# explicitly (no error-swallowing), same as it did for the real bytemuck/
-# zeroize conflicts.
-indexmap = "=2.2.6"
+# indexmap pin REMOVED (confirmed impossible): anchor-lang 1.0.2 itself now
+# hard-requires indexmap >=2.3.0 (via anchor-derive-serde -> proc-macro-crate
+# -> toml_edit 0.23.2) -- confirmed via cargo's own explicit resolver error,
+# which listed all 19 available versions >=2.3.0 and confirmed every one
+# conflicts with our old =2.2.6 pin. Unlike the earlier bytemuck/spl-token
+# conflicts (real, unrelated crates), this one is unresolvable: 2.2.6 < 2.3.0
+# can never satisfy a >=2.3.0 floor, no matter what version we try.
+#
+# This is fine now: our vendor-patch layer (build.yml) was originally pinning
+# indexmap specifically to dodge unstable syntax (const_mut_refs, lifetime-
+# annotated &mut, use<> bounds) in its newer releases. Those patches have
+# since been generalized (not tied to a specific version/line number) and
+# already fixed to handle exactly these constructs -- letting cargo resolve
+# indexmap naturally (currently 2.14.0) should now be caught correctly by
+# patches that already work, rather than needing a version pin at all.
 
 [features]
 no-entrypoint = []
