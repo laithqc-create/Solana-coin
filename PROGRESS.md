@@ -973,3 +973,23 @@ Since we removed the old indexmap/hybrid-array/bytemuck pins as part of Anchor 1
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token confirmed still active — rotation strongly recommended, not yet confirmed done
+
+---
+
+## 🛑 RESUME FROM HERE (checkpoint after removing impossible indexmap pin)
+
+### Definitive answer (commit `bde9f5b`)
+Got the actual error text this time: `anchor-lang 1.0.2` itself hard-requires `indexmap >=2.3.0` (via `anchor-derive-serde → proc-macro-crate → toml_edit 0.23.2`). Our `=2.2.6` pin was mathematically impossible against this floor — confirmed via cargo listing all 19 available versions ≥2.3.0 and stating every one conflicts with our pin. Unlike bytemuck/spl-token (fixable by bumping to a different version), this one has no fixable pin — anything below 2.3.0 is impossible, anything above barely differs from letting it resolve naturally.
+
+**Fix:** removed the pin entirely. This should be safe now — the original reason for pinning was to dodge indexmap's newer unstable syntax, but those vendor-patch fixes have since been generalized (bounded-distance regex for size_of/align_of, lifetime-aware regex for const-fn-with-mut) rather than tied to specific versions/line numbers, and already handle the constructs indexmap 2.14.0 uses. Letting it resolve naturally should now be caught by patches already proven to work.
+
+**Verified the removal actually persisted** before pushing (a prior similar edit attempt silently failed and was caught the same way).
+
+### Status: AWAITING CI RESULT
+If indexmap 2.14.0 now compiles cleanly via our generalized patches, this closes out one of the longest-running threads this session. If a genuinely new construct surfaces, apply the same generalization-over-enumeration approach that's worked well recently.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token confirmed still active — rotation strongly recommended, not yet confirmed done
