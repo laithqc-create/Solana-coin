@@ -350,6 +350,24 @@ jobs:
             echo "✅ Patched ctutils: ALL const fn -> fn (same blanket pattern as hybrid-array)"
           fi
 
+          if [ -d vendor/bytemuck ]; then
+            # bytemuck's checked.rs uses '?' to convert PodCastError into
+            # CheckedCastError, relying on 'impl From<PodCastError> for
+            # CheckedCastError' — confirmed via multiple independent primary
+            # sources (crates.io mirrors of bytemuck's real checked.rs) that
+            # this impl IS present, unconditionally, no feature gate. Despite
+            # that, our SBF build consistently reports it as missing across
+            # multiple bytemuck versions (fix #31, and again here at 1.25.1) —
+            # true root cause never conclusively identified after two
+            # investigation rounds. Rather than keep chasing why, patch the
+            # conversion explicitly at each of the 8 call sites: safe
+            # regardless of whatever the underlying cause is, since it
+            # doesn't depend on the From impl resolving at all.
+            sed -i -E 's/^(\s*let pod = .*)\?;$/\1.map_err(CheckedCastError::PodCastError)?;/' \
+              vendor/bytemuck/src/checked.rs 2>/dev/null || true
+            echo "✅ Patched bytemuck: explicit PodCastError->CheckedCastError conversion (8 sites)"
+          fi
+
           # 4e. GENERALIZED (fix #26): bare size_of/align_of/size_of_val calls
           #     relying on edition2024's expanded prelude auto-import. First
           #     seen in indexmap (fix #17, one call site, qualified inline);
@@ -719,6 +737,10 @@ jobs:
           fi
           if [ -d vendor/ctutils ]; then
             find vendor/ctutils -name "*.rs" -exec sed -i -E 's/const fn /fn /g' {} \;
+          fi
+          if [ -d vendor/bytemuck ]; then
+            sed -i -E 's/^(\s*let pod = .*)\?;$/\1.map_err(CheckedCastError::PodCastError)?;/' \
+              vendor/bytemuck/src/checked.rs 2>/dev/null || true
           fi
           printf '%s\n' \
             'import re, pathlib' \
