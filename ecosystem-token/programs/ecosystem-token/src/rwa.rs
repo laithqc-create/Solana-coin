@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use rust_decimal::prelude::*;
+use crate::errors::EcosystemError;
 
 // ============================================================================
 // RUSDY (Real World Asset) Investment Module
@@ -120,14 +120,29 @@ pub fn calculate_rwa_yield(
         return Ok(0);
     }
 
-    let principal = Decimal::from(principal_usdc);
-    let rate = Decimal::from(RUSDY_APY_BPS) / Decimal::from(10_000u64);
-    let time_fraction = Decimal::from(seconds_elapsed)
-        / Decimal::from(365u64 * 24u64 * 3600u64);
+    // Fixed-point integer math (no external decimal/float libraries):
+    //   yield = principal * apy_bps * seconds_elapsed / (10_000 * seconds_per_year)
+    // All multiplication happens before the single final division, which is
+    // both more precise (avoids the two separate intermediate roundings the
+    // old Decimal-based version performed) and safer (checked arithmetic
+    // throughout — no silent `unwrap_or(0)` swallowing an overflow).
+    const SECONDS_PER_YEAR: u128 = 365u128 * 24 * 3600;
 
-    let yield_amount = principal * rate * time_fraction;
+    let numerator = (principal_usdc as u128)
+        .checked_mul(RUSDY_APY_BPS as u128)
+        .ok_or(EcosystemError::MathOverflow)?
+        .checked_mul(seconds_elapsed as u128)
+        .ok_or(EcosystemError::MathOverflow)?;
 
-    Ok(yield_amount.to_u64().unwrap_or(0))
+    let denominator = 10_000u128
+        .checked_mul(SECONDS_PER_YEAR)
+        .ok_or(EcosystemError::MathOverflow)?;
+
+    let yield_amount = numerator
+        .checked_div(denominator)
+        .ok_or(EcosystemError::MathOverflow)?;
+
+    Ok(u64::try_from(yield_amount).map_err(|_| EcosystemError::MathOverflow)?)
 }
 
 // ============================================================================

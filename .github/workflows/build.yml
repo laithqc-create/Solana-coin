@@ -233,14 +233,32 @@ jobs:
             sed -i '/^impl core::error::Error for [A-Za-z_][A-Za-z0-9_]* {}$/d' "$rsfile"
           done
 
-          #     + use<'a, K, V, ...> precise-capturing bounds (stabilized Rust
-          #     1.82) -> stripped. Under edition2021 (which we've forced via
-          #     the edition patch above), return-position impl Trait already
-          #     captures all in-scope lifetimes by default — the exact
-          #     behavior this syntax exists to opt into under edition2024.
-          #     Removing it doesn't change what's captured, only removes now-
-          #     unparseable syntax expressing something already implied.
-          find vendor/ -name "*.rs" -exec sed -i 's/ + use<[^>]*>//g' {} \;
+          #     REGRESSION FIX: previously (fix #17-19) we blindly STRIPPED
+          #     all '+ use<...>' precise-capturing bounds, on the assumption
+          #     that edition2021's default RPIT auto-capture makes them
+          #     redundant. That assumption was WRONG for closures with
+          #     elided/HRTB lifetimes (e.g. 'impl Fn(&usize) -> u64') —
+          #     stripping the bound here causes E0700 ("hidden type captures
+          #     lifetime that does not appear in bounds"), confirmed via
+          #     direct CI error text. Un-did the blanket strip entirely.
+          #
+          #     Fix: two targeted, content-anchored patches for indexmap's
+          #     specific known-affected signatures (inner.rs get_hash/
+          #     equivalent), ADDING an explicit lifetime bound using the OLD,
+          #     universally-supported '+ 'lifetime' syntax (valid since Rust
+          #     1.0) rather than the modern 'use<...>' syntax (needs rustc
+          #     1.82+, which the bundled SBF compiler may not have). This
+          #     matches rustc's own alternate suggested fix for this exact
+          #     error on older toolchains. Verified locally against the
+          #     exact reported lines before pushing (Rule 8).
+          if [ -d vendor/indexmap ]; then
+            sed -i \
+              "s/-> impl Fn(&usize) -> u64 {/-> impl Fn(\&usize) -> u64 + '_ {/" \
+              vendor/indexmap/src/inner.rs 2>/dev/null || true
+            sed -i \
+              "s/-> impl Fn(&usize) -> bool {/-> impl Fn(\&usize) -> bool + 'a {/" \
+              vendor/indexmap/src/inner.rs 2>/dev/null || true
+          fi
 
           #     const fn ... &mut ... -> mutable refs in const fn (stabilized
           #     Rust 1.83, issue #57349) -> demoted to plain fn. Broadened
@@ -674,7 +692,14 @@ jobs:
           find vendor/ -name "*.rs" | while read -r rsfile; do
             sed -i '/^impl core::error::Error for [A-Za-z_][A-Za-z0-9_]* {}$/d' "$rsfile"
           done
-          find vendor/ -name "*.rs" -exec sed -i 's/ + use<[^>]*>//g' {} \;
+          if [ -d vendor/indexmap ]; then
+            sed -i \
+              "s/-> impl Fn(&usize) -> u64 {/-> impl Fn(\&usize) -> u64 + '_ {/" \
+              vendor/indexmap/src/inner.rs 2>/dev/null || true
+            sed -i \
+              "s/-> impl Fn(&usize) -> bool {/-> impl Fn(\&usize) -> bool + 'a {/" \
+              vendor/indexmap/src/inner.rs 2>/dev/null || true
+          fi
           find vendor/ -name "*.rs" -exec sed -i -E "/&mut|&'[a-zA-Z_]+ mut/ s/const fn/fn/" {} \;
           if [ -d vendor/hashbrown ]; then
             HB=vendor/hashbrown/src

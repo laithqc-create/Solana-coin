@@ -15,7 +15,6 @@ anchor-spl = "1.0.2"
 # token-account v8.0.0. Bumped to those major lines.
 spl-token = "9"
 spl-associated-token-account = "8"
-rust_decimal = { version = "1.27", features = ["maths"] }
 
 # Required explicitly by Anchor 0.30+ (previously implicit-enabled by anchor init
 # scaffolding, now must be declared). Also a Rule 8 requirement: this contract
