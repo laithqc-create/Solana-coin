@@ -993,3 +993,25 @@ If indexmap 2.14.0 now compiles cleanly via our generalized patches, this closes
 2. ⏳ Telegram Mini App details — awaiting user input
 3. ⏳ Supabase project details — awaiting user input
 4. ⚠️ SECURITY: original GitHub token confirmed still active — rotation strongly recommended, not yet confirmed done
+
+---
+
+## 🛑 RESUME FROM HERE (checkpoint after use<> regression fix + recovering lost rust_decimal commit)
+
+### Two real fixes in commit `827f4fa`
+
+**1. Fixed a dormant regression from fix #17-19:** the vendor-patch layer blindly stripped ALL `+ use<...>` precise-capturing bounds since early in this session, assuming edition2021's default RPIT auto-capture made them redundant. Confirmed via direct CI error text this was wrong for closures with elided/HRTB lifetimes — stripping caused `E0700`. Replaced blanket stripping with targeted patches adding the old-syntax `+ '_`/`+ 'a` bounds (valid since Rust 1.0) for indexmap's two specific affected signatures. Verified against the actual extracted rendered script and real error text.
+
+**2. Recovered genuinely lost work:** discovered via `git log -- rwa.rs` that the `rust_decimal` → `u128` fixed-point math conversion (made during the "go library-free" discussion) was done locally but **never committed** — got sidetracked into further discussion and unrelated commits without ever `git add`-ing these two files. They'd been sitting as uncommitted sandbox state, which is exactly why CI kept reporting "Decimal not found" despite the fix supposedly being done rounds ago. Now actually committed and pushed.
+
+### Process lesson for future sessions
+When an edit is made mid-conversation but the immediate next action is a *different* commit (not including that file), always double check `git status`/`git diff --stat` before assuming prior work was captured — this is the second time this session an edit silently didn't make it into a commit (the earlier Cargo.toml indexmap-pin case was caught quickly; this one sat for several rounds before being caught).
+
+### Status: AWAITING CI RESULT
+Full dependency-cleanup thread: bytemuck/spl-token bumps → zeroize conflict fixed → indexmap pin confirmed impossible → indexmap unpinned → use<> regression found and fixed → lost rust_decimal work recovered. This should be the most complete/correct state the project has been in.
+
+### All pending blockers (unchanged)
+1. ⏳ GitHub Secrets not yet added (`PROGRAM_ID`, `DEPLOY_KEYPAIR`)
+2. ⏳ Telegram Mini App details — awaiting user input
+3. ⏳ Supabase project details — awaiting user input
+4. ⚠️ SECURITY: original GitHub token confirmed still active — rotation strongly recommended, not yet confirmed done
